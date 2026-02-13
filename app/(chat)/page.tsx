@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { connection } from "next/server";
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
@@ -13,6 +14,7 @@ export default function Page() {
 }
 
 async function NewChatPage() {
+  await connection();
   const id = generateUUID();
 
   return (
