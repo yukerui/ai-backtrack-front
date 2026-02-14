@@ -156,18 +156,35 @@ function enrichAssistantText(raw: string) {
   return `${text}\n\n${appended.join(" | ")}`;
 }
 
+function getCookieValue(cookieHeader: string | null, key: string): string {
+  if (!cookieHeader) {
+    return "";
+  }
+  const parts = cookieHeader.split(";").map((x) => x.trim());
+  for (const part of parts) {
+    if (!part.startsWith(`${key}=`)) {
+      continue;
+    }
+    return decodeURIComponent(part.slice(key.length + 1));
+  }
+  return "";
+}
+
 async function streamFromClaudeProxy({
   dataStream,
   chatId,
   isNewChat,
   userText,
+  turnstileToken,
 }: {
   dataStream: any;
   chatId: string;
   isNewChat: boolean;
   userText: string;
+  turnstileToken?: string;
 }) {
-  const base = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
+  const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
+  const base = rawBase.replace(/\/+$/, "");
   const token = process.env.CLAUDE_CODE_GATEWAY_TOKEN;
 
   if (!token) {
@@ -181,6 +198,7 @@ async function streamFromClaudeProxy({
       authorization: `Bearer ${token}`,
       "x-chat-id": chatId,
       "x-chat-new": isNewChat ? "true" : "false",
+      ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
     },
     body: JSON.stringify({
       model: FIXED_CHAT_MODEL,
@@ -196,8 +214,25 @@ async function streamFromClaudeProxy({
 
   if (!upstream.ok || !upstream.body) {
     const details = await upstream.text().catch(() => "");
+    let upstreamMessage = details || upstream.statusText;
+    try {
+      const parsed = JSON.parse(details);
+      if (typeof parsed?.error?.message === "string" && parsed.error.message) {
+        upstreamMessage = parsed.error.message;
+      }
+    } catch {
+      // ignore parse errors and fallback to raw text
+    }
+
+    const turnstileMatch = upstreamMessage.match(
+      /Turnstile verification failed:\s*([a-zA-Z0-9_-]+)/i
+    );
+    if (upstream.status === 403 && turnstileMatch?.[1]) {
+      throw new Error(`turnstile_upstream:${turnstileMatch[1].toLowerCase()}`);
+    }
+
     throw new Error(
-      `Claude proxy upstream failed (${upstream.status}): ${details || upstream.statusText}`
+      `Claude proxy upstream failed (${upstream.status}): ${upstreamMessage || upstream.statusText}`
     );
   }
 
@@ -207,7 +242,7 @@ async function streamFromClaudeProxy({
   const reasoningId = generateUUID();
   let buffer = "";
   let textBuffer = "";
-  let reasoningBuffer = "";
+  let reasoningStarted = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -246,7 +281,7 @@ async function streamFromClaudeProxy({
       }
 
       const delta = parsed?.choices?.[0]?.delta?.content;
-      const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning;
+    const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning;
       const textDelta =
         typeof delta === "string"
           ? delta
@@ -255,12 +290,20 @@ async function streamFromClaudeProxy({
                 .map((part) => (typeof part?.text === "string" ? part.text : ""))
                 .join("")
             : "";
-      const normalizedReasoning =
-        typeof reasoningDelta === "string" ? reasoningDelta : "";
+    const normalizedReasoning =
+      typeof reasoningDelta === "string" ? reasoningDelta : "";
 
-      if (normalizedReasoning) {
-        reasoningBuffer += normalizedReasoning;
+    if (normalizedReasoning) {
+      if (!reasoningStarted) {
+        dataStream.write({ type: "reasoning-start", id: reasoningId });
+        reasoningStarted = true;
       }
+      dataStream.write({
+        type: "reasoning-delta",
+        id: reasoningId,
+        delta: normalizedReasoning,
+      });
+    }
 
       if (textDelta) {
         textBuffer += textDelta;
@@ -268,13 +311,7 @@ async function streamFromClaudeProxy({
     }
   }
 
-  if (reasoningBuffer) {
-    dataStream.write({ type: "reasoning-start", id: reasoningId });
-    dataStream.write({
-      type: "reasoning-delta",
-      id: reasoningId,
-      delta: reasoningBuffer,
-    });
+  if (reasoningStarted) {
     dataStream.write({ type: "reasoning-end", id: reasoningId });
   }
 
@@ -292,9 +329,12 @@ async function streamFromClaudeProxy({
 
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
+  let rawRequestBody: Record<string, unknown> | null = null;
 
   try {
     const json = await request.json();
+    rawRequestBody =
+      json && typeof json === "object" ? (json as Record<string, unknown>) : null;
     requestBody = postRequestBodySchema.parse(json);
   } catch (_) {
     return new ChatSDKError("bad_request:api").toResponse();
@@ -378,6 +418,35 @@ export async function POST(request: Request) {
     }
 
     const backend = process.env.CHAT_BACKEND || DEFAULT_BACKEND;
+    const turnstileTokenFromBody =
+      typeof rawRequestBody?.turnstileToken === "string"
+        ? rawRequestBody.turnstileToken
+        : "";
+    const turnstileTokenFromCookie = getCookieValue(
+      request.headers.get("cookie"),
+      "turnstile_token"
+    );
+    const turnstileToken =
+      request.headers.get("x-turnstile-token") ||
+      request.headers.get("cf-turnstile-response") ||
+      turnstileTokenFromBody ||
+      turnstileTokenFromCookie ||
+      "";
+    console.log(
+      `[chat-api] turnstile header=${Boolean(
+        request.headers.get("x-turnstile-token") || request.headers.get("cf-turnstile-response")
+      )} body=${Boolean(turnstileTokenFromBody)} cookie=${Boolean(turnstileTokenFromCookie)}`
+    );
+    if (backend === "claude_proxy" && !turnstileToken) {
+      return Response.json(
+        {
+          code: "forbidden:chat",
+          message: "请先通过 Turnstile 验证后再发送。",
+          cause: "turnstile_missing_token",
+        },
+        { status: 403 }
+      );
+    }
 
     const { longitude, latitude, city, country } = geolocation(request);
 
@@ -445,6 +514,7 @@ export async function POST(request: Request) {
             chatId: id,
             isNewChat: !chat,
             userText,
+            turnstileToken,
           });
         }
 
@@ -497,7 +567,17 @@ export async function POST(request: Request) {
           });
         }
       },
-      onError: () => "Oops, an error occurred!",
+      onError: (error) => {
+        if (error instanceof Error) {
+          if (error.message.startsWith("turnstile_upstream:")) {
+            return "Turnstile 验证失败，请重新勾选后再发送。";
+          }
+          if (error.message.includes("Claude proxy upstream failed (429)")) {
+            return "请求过于频繁，请稍后重试。";
+          }
+        }
+        return "Oops, an error occurred!";
+      },
     });
 
     return createUIMessageStreamResponse({
@@ -523,6 +603,21 @@ export async function POST(request: Request) {
 
     if (error instanceof ChatSDKError) {
       return error.toResponse();
+    }
+
+    if (
+      error instanceof Error &&
+      error.message?.startsWith("turnstile_upstream:")
+    ) {
+      const reason = error.message.split(":", 2)[1] || "verification_failed";
+      return Response.json(
+        {
+          code: "forbidden:chat",
+          message: "Turnstile 验证失败，请重新勾选后再发送。",
+          cause: `turnstile_${reason}`,
+        },
+        { status: 403 }
+      );
     }
 
     if (
