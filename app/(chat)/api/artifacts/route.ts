@@ -1,14 +1,31 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { auth } from "@/app/(auth)/auth";
 import { ChatSDKError } from "@/lib/errors";
 
+function getRepoRoot() {
+  const cwd = process.cwd();
+  const candidate = path.resolve(cwd, "..");
+  if (fs.existsSync(path.resolve(cwd, "backend")) && fs.existsSync(path.resolve(cwd, "front"))) {
+    return cwd;
+  }
+  if (
+    fs.existsSync(path.resolve(candidate, "backend")) &&
+    fs.existsSync(path.resolve(candidate, "front"))
+  ) {
+    return candidate;
+  }
+  return cwd;
+}
+
+const REPO_ROOT = getRepoRoot();
 const ARTIFACT_ROOTS = [
-  path.resolve(process.cwd(), "artifacts"),
-  path.resolve(process.cwd(), "backend/artifacts"),
-  path.resolve(process.cwd(), "front/artifacts"),
+  path.resolve(REPO_ROOT, "artifacts"),
+  path.resolve(REPO_ROOT, "backend/artifacts"),
+  path.resolve(REPO_ROOT, "front/artifacts"),
 ];
 const TOKEN_TTL_MS = Number.parseInt(process.env.ARTIFACTS_TOKEN_TTL_MS || "3600000", 10);
 const ARTIFACTS_SIGNING_SECRET =
@@ -32,7 +49,9 @@ function fromBase64Url(input: string) {
   return Buffer.from(base64 + pad, "base64");
 }
 
-function verifyToken(token: string) {
+function verifyToken(
+  token: string
+): { ok: true; path: string } | { ok: false; error: string } {
   if (!ARTIFACTS_SIGNING_SECRET) {
     return { ok: false, error: "Missing artifact signing secret" };
   }
@@ -107,22 +126,35 @@ export async function GET(request: Request) {
   }
 
   const normalizedPath = resolvedPath.replace(/^\/+/, "");
-  const absolutePath = path.resolve(process.cwd(), normalizedPath);
+  const absolutePath = path.resolve(REPO_ROOT, normalizedPath);
   const isAllowed = ARTIFACT_ROOTS.some((root) => absolutePath.startsWith(root + path.sep));
   if (!isAllowed) {
     return NextResponse.json({ error: "Path traversal is not allowed" }, { status: 400 });
   }
 
-  try {
-    const content = await readFile(absolutePath);
-    return new Response(content, {
-      status: 200,
-      headers: {
-        "content-type": getContentType(absolutePath),
-        "cache-control": "no-store",
-      },
-    });
-  } catch {
-    return NextResponse.json({ error: "Artifact file not found" }, { status: 404 });
+  const candidatePaths = [absolutePath];
+  if (normalizedPath.startsWith("artifacts/")) {
+    candidatePaths.push(path.resolve(REPO_ROOT, `backend/${normalizedPath}`));
+    candidatePaths.push(path.resolve(REPO_ROOT, `front/${normalizedPath}`));
   }
+
+  for (const candidate of candidatePaths) {
+    if (!ARTIFACT_ROOTS.some((root) => candidate.startsWith(root + path.sep))) {
+      continue;
+    }
+    try {
+      const content = await readFile(candidate);
+      return new Response(content, {
+        status: 200,
+        headers: {
+          "content-type": getContentType(candidate),
+          "cache-control": "no-store",
+        },
+      });
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return NextResponse.json({ error: "Artifact file not found" }, { status: 404 });
 }

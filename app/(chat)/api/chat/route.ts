@@ -7,6 +7,9 @@ import {
   stepCountIs,
   streamText,
 } from "ai";
+import { createHmac } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
 import { auth, type UserType } from "@/app/(auth)/auth";
@@ -101,8 +104,88 @@ function extractLatestUserText(body: PostRequestBody) {
   return "";
 }
 
+const ARTIFACTS_SIGNING_SECRET =
+  process.env.ARTIFACTS_SIGNING_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  process.env.AUTH_SECRET ||
+  "";
+const ARTIFACTS_TOKEN_TTL_MS = Number.parseInt(
+  process.env.ARTIFACTS_TOKEN_TTL_MS || "3600000",
+  10
+);
+
+function toBase64Url(input: Buffer | string) {
+  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input, "utf8");
+  return buffer
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function signArtifactToken(path: string) {
+  if (!ARTIFACTS_SIGNING_SECRET) {
+    return "";
+  }
+  const payload = JSON.stringify({ p: path, e: Date.now() + ARTIFACTS_TOKEN_TTL_MS });
+  const sig = createHmac("sha256", ARTIFACTS_SIGNING_SECRET).update(payload).digest();
+  return `${toBase64Url(payload)}.${toBase64Url(sig)}`;
+}
+
+function getRepoRoot() {
+  const cwd = process.cwd();
+  const candidate = path.resolve(cwd, "..");
+  if (fs.existsSync(path.resolve(cwd, "backend")) && fs.existsSync(path.resolve(cwd, "front"))) {
+    return cwd;
+  }
+  if (
+    fs.existsSync(path.resolve(candidate, "backend")) &&
+    fs.existsSync(path.resolve(candidate, "front"))
+  ) {
+    return candidate;
+  }
+  return cwd;
+}
+
+const REPO_ROOT = getRepoRoot();
+const ARTIFACT_ROOTS = [
+  path.resolve(REPO_ROOT, "artifacts"),
+  path.resolve(REPO_ROOT, "backend/artifacts"),
+  path.resolve(REPO_ROOT, "front/artifacts"),
+];
+
+function resolveArtifactPath(inputPath: string) {
+  const cleaned = inputPath.replace(/^\/+/, "");
+  if (cleaned.startsWith("backend/artifacts/") || cleaned.startsWith("front/artifacts/")) {
+    return cleaned;
+  }
+  if (!cleaned.startsWith("artifacts/")) {
+    return cleaned;
+  }
+  const candidates = [
+    path.resolve(REPO_ROOT, cleaned),
+    path.resolve(REPO_ROOT, `backend/${cleaned}`),
+    path.resolve(REPO_ROOT, `front/${cleaned}`),
+  ];
+  const matched = candidates.find((candidate) =>
+    ARTIFACT_ROOTS.some((root) => candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)
+  );
+  if (!matched) {
+    return cleaned;
+  }
+  const root = ARTIFACT_ROOTS.find((r) => matched.startsWith(r + path.sep));
+  if (!root) {
+    return cleaned;
+  }
+  return path.relative(REPO_ROOT, matched).replace(/\\/g, "/");
+}
+
 function toArtifactUrl(path: string) {
-  return `/api/artifacts?path=${encodeURIComponent(path)}`;
+  const resolved = resolveArtifactPath(path);
+  const token = signArtifactToken(resolved);
+  return token
+    ? `/api/artifacts?token=${encodeURIComponent(token)}`
+    : `/api/artifacts?path=${encodeURIComponent(resolved)}`;
 }
 
 function enrichAssistantText(raw: string) {
@@ -110,7 +193,7 @@ function enrichAssistantText(raw: string) {
     return raw;
   }
 
-  const pathRegex = /artifacts\/[A-Za-z0-9._/-]+\.(html|csv)/g;
+  const pathRegex = /(?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(html|csv)/g;
   const seen = new Set<string>();
 
   let text = raw
@@ -123,11 +206,14 @@ function enrichAssistantText(raw: string) {
       "open it directly from the link below."
     );
 
-  text = text.replace(/`(artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv))`/g, (_, path) => {
-    const normalized = String(path);
-    seen.add(normalized);
-    return `[\`${normalized}\`](${toArtifactUrl(normalized)})`;
-  });
+  text = text.replace(
+    /`((?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv))`/g,
+    (_, path) => {
+      const normalized = String(path);
+      seen.add(normalized);
+      return `[\`${normalized}\`](${toArtifactUrl(normalized)})`;
+    }
+  );
 
   let match: RegExpExecArray | null = null;
   while ((match = pathRegex.exec(text)) !== null) {
