@@ -27,6 +27,14 @@ const ARTIFACT_ROOTS = [
   path.resolve(REPO_ROOT, "backend/artifacts"),
   path.resolve(REPO_ROOT, "front/artifacts"),
 ];
+
+function normalizeRemoteBase(raw: string) {
+  const trimmed = raw.replace(/\/+$/, "");
+  if (trimmed.endsWith("/v1/chat/completions")) {
+    return trimmed.replace(/\/v1\/chat\/completions$/, "");
+  }
+  return trimmed;
+}
 const TOKEN_TTL_MS = Number.parseInt(process.env.ARTIFACTS_TOKEN_TTL_MS || "3600000", 10);
 const ARTIFACTS_SIGNING_SECRET =
   process.env.ARTIFACTS_SIGNING_SECRET ||
@@ -153,6 +161,33 @@ export async function GET(request: Request) {
       });
     } catch {
       // try next candidate
+    }
+  }
+
+  const remoteBase =
+    process.env.ARTIFACTS_REMOTE_BASE || process.env.CLAUDE_CODE_API_BASE || "";
+  if (remoteBase && token) {
+    const base = normalizeRemoteBase(remoteBase);
+    try {
+      const upstream = await fetch(`${base}/artifacts?token=${encodeURIComponent(token)}`, {
+        headers: {
+          accept: "text/html, text/csv, application/json, text/plain",
+        },
+        cache: "no-store",
+      });
+      if (upstream.ok) {
+        const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+        const content = await upstream.arrayBuffer();
+        return new Response(content, {
+          status: 200,
+          headers: {
+            "content-type": contentType,
+            "cache-control": "no-store",
+          },
+        });
+      }
+    } catch {
+      // ignore upstream errors
     }
   }
 
