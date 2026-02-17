@@ -1,0 +1,53 @@
+{
+  "configPath": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-dAWhJh/trigger.config.mjs",
+  "customConditions": [
+  ],
+  "queues": [
+  ],
+  "runtime": "node",
+  "runtimeVersion": "23.3.0",
+  "tasks": [
+    {
+      "entryPoint": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-dAWhJh/trigger/fund-chat-task.mjs",
+      "filePath": "trigger/fund-chat-task.ts",
+      "id": "fund-chat-task",
+      "maxDuration": 3600,
+      "payloadSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "isNewChat": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "turnstileToken": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "userText": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "chatId",
+          "userText"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "timings": {
+    "trigger/fund-chat-task.ts": 1.181916000000001,
+    "trigger/streams.ts": 0.37324999999998454
+  },
+  "workerEntryPoint": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-dAWhJh/node_modules/.pnpm/trigger.dev@4.3.3_bufferutil@4.0.9_typescript@5.8.2/node_modules/trigger.dev/dist/esm/entryPoints/dev-run-worker.mjs"
+}

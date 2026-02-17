@@ -7,11 +7,9 @@ import {
   stepCountIs,
   streamText,
 } from "ai";
-import { createHmac } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
+import { runs, tasks } from "@trigger.dev/sdk";
 import { auth, type UserType } from "@/app/(auth)/auth";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
@@ -21,6 +19,7 @@ import { createDocument } from "@/lib/ai/tools/create-document";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
+import { enrichAssistantText } from "@/lib/artifacts";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
@@ -37,6 +36,8 @@ import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
+import type { fundChatTask } from "@/trigger/fund-chat-task";
+import { decodeFundChatRealtimeChunk, fundChatRealtimeStream } from "@/trigger/streams";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -45,6 +46,27 @@ export const maxDuration = 300;
 const DEFAULT_BACKEND = "claude_proxy";
 const FIXED_CHAT_MODEL =
   process.env.CODEX_MODEL || process.env.CLAUDE_CODE_MODEL || "gpt-5-codex";
+const USE_TRIGGER_DEV = (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
+const TRIGGER_STREAM_READ_TIMEOUT_SECONDS = Number.parseInt(
+  process.env.TRIGGER_STREAM_READ_TIMEOUT_SECONDS || "600",
+  10
+);
+const TRIGGER_STREAM_POLL_INTERVAL_MS = Number.parseInt(
+  process.env.TRIGGER_STREAM_POLL_INTERVAL_MS || "1000",
+  10
+);
+const TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS = Number.parseInt(
+  process.env.TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS || "10000",
+  10
+);
+const TRIGGER_FAILURE_STATUSES = new Set([
+  "FAILED",
+  "CRASHED",
+  "SYSTEM_FAILURE",
+  "TIMED_OUT",
+  "CANCELED",
+  "EXPIRED",
+]);
 
 function getStreamContext() {
   try {
@@ -104,143 +126,140 @@ function extractLatestUserText(body: PostRequestBody) {
   return "";
 }
 
-const ARTIFACTS_SIGNING_SECRET =
-  process.env.ARTIFACTS_SIGNING_SECRET ||
-  process.env.NEXTAUTH_SECRET ||
-  process.env.AUTH_SECRET ||
-  "";
-const ARTIFACTS_TOKEN_TTL_MS = Number.parseInt(
-  process.env.ARTIFACTS_TOKEN_TTL_MS || "3600000",
-  10
-);
-
-function toBase64Url(input: Buffer | string) {
-  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input, "utf8");
-  return buffer
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-}
-
-function signArtifactToken(path: string) {
-  if (!ARTIFACTS_SIGNING_SECRET) {
-    return "";
-  }
-  const payload = JSON.stringify({ p: path, e: Date.now() + ARTIFACTS_TOKEN_TTL_MS });
-  const sig = createHmac("sha256", ARTIFACTS_SIGNING_SECRET).update(payload).digest();
-  return `${toBase64Url(payload)}.${toBase64Url(sig)}`;
-}
-
-function getRepoRoot() {
-  const cwd = process.cwd();
-  const candidate = path.resolve(cwd, "..");
-  if (fs.existsSync(path.resolve(cwd, "backend")) && fs.existsSync(path.resolve(cwd, "front"))) {
-    return cwd;
-  }
-  if (
-    fs.existsSync(path.resolve(candidate, "backend")) &&
-    fs.existsSync(path.resolve(candidate, "front"))
-  ) {
-    return candidate;
-  }
-  return cwd;
-}
-
-const REPO_ROOT = getRepoRoot();
-const ARTIFACT_ROOTS = [
-  path.resolve(REPO_ROOT, "artifacts"),
-  path.resolve(REPO_ROOT, "backend/artifacts"),
-  path.resolve(REPO_ROOT, "front/artifacts"),
-];
-
-function resolveArtifactPath(inputPath: string) {
-  const cleaned = inputPath.replace(/^\/+/, "");
-  if (cleaned.startsWith("backend/artifacts/") || cleaned.startsWith("front/artifacts/")) {
-    return cleaned;
-  }
-  if (!cleaned.startsWith("artifacts/")) {
-    return cleaned;
-  }
-  const candidates = [
-    path.resolve(REPO_ROOT, cleaned),
-    path.resolve(REPO_ROOT, `backend/${cleaned}`),
-    path.resolve(REPO_ROOT, `front/${cleaned}`),
-  ];
-  const matched = candidates.find((candidate) =>
-    ARTIFACT_ROOTS.some((root) => candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)
-  );
-  if (!matched) {
-    return cleaned;
-  }
-  const root = ARTIFACT_ROOTS.find((r) => matched.startsWith(r + path.sep));
-  if (!root) {
-    return cleaned;
-  }
-  return path.relative(REPO_ROOT, matched).replace(/\\/g, "/");
-}
-
-function toArtifactUrl(path: string) {
-  const resolved = resolveArtifactPath(path);
-  const token = signArtifactToken(resolved);
-  return token
-    ? `/api/artifacts?token=${encodeURIComponent(token)}`
-    : `/api/artifacts?path=${encodeURIComponent(resolved)}`;
-}
-
-function enrichAssistantText(raw: string) {
-  if (!raw) {
-    return raw;
-  }
-
-  const pathRegex = /(?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(html|csv)/g;
-  const seen = new Set<string>();
-
-  let text = raw
-    .replace(
-      /在项目根目录运行\s*`open\s+[^`]+`\s*即可在浏览器中查看，?/g,
-      "可直接点击下方链接查看，"
-    )
-    .replace(
-      /run\s+`open\s+[^`]+`\s+to\s+view\s+it\s+in\s+your\s+browser\.?/gi,
-      "open it directly from the link below."
-    );
-
-  text = text.replace(
-    /`((?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv))`/g,
-    (_, path) => {
-      const normalized = String(path);
-      seen.add(normalized);
-      return `[\`${normalized}\`](${toArtifactUrl(normalized)})`;
+type TriggerTaskOutput =
+  | string
+  | {
+      text?: unknown;
+      artifacts?: unknown;
+      [key: string]: unknown;
     }
-  );
+  | null
+  | undefined;
 
-  let match: RegExpExecArray | null = null;
-  while ((match = pathRegex.exec(text)) !== null) {
-    seen.add(match[0]);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toArtifactList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as string[];
+  }
+  return value
+    .filter((item) => typeof item === "string")
+    .map((item) => String(item))
+    .filter((item) => item.length > 0);
+}
+
+function normalizeTriggerTaskOutput(raw: TriggerTaskOutput) {
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return normalizeTriggerTaskOutput(parsed as TriggerTaskOutput);
+    } catch {
+      return { text: raw, artifacts: [] as string[] };
+    }
   }
 
-  if (seen.size === 0) {
+  if (!isRecord(raw)) {
+    return { text: "", artifacts: [] as string[] };
+  }
+
+  const text = typeof raw.text === "string" ? raw.text : "";
+  const artifacts = toArtifactList(raw.artifacts);
+
+  if (text) {
+    return { text, artifacts };
+  }
+
+  return {
+    text: `\`\`\`json\n${JSON.stringify(raw, null, 2)}\n\`\`\``,
+    artifacts,
+  };
+}
+
+function appendArtifactsToText(text: string, artifacts: string[]) {
+  if (artifacts.length === 0) {
     return text;
   }
-
-  const htmlTargets = Array.from(seen).filter((path) => path.endsWith(".html"));
-  const csvTargets = Array.from(seen).filter((path) => path.endsWith(".csv"));
-
-  const appended: string[] = [];
-  if (htmlTargets.length > 0) {
-    appended.push(
-      ...htmlTargets.map((path, index) => `[打开交互网页${index + 1}](${toArtifactUrl(path)})`)
-    );
-  }
-  if (csvTargets.length > 0) {
-    appended.push(
-      ...csvTargets.map((path, index) => `[下载数据文件${index + 1}](${toArtifactUrl(path)})`)
-    );
-  }
-
-  return `${text}\n\n${appended.join(" | ")}`;
+  const lines = artifacts.map((artifactPath) => `- \`${artifactPath}\``).join("\n");
+  const prefix = text.trim() ? `${text.trim()}\n\n` : "";
+  return `${prefix}资源\n${lines}`;
 }
+
+function extractRunErrorMessage(errorValue: unknown, fallback: string) {
+  if (typeof errorValue === "string" && errorValue.trim()) {
+    return errorValue.trim();
+  }
+  if (isRecord(errorValue) && typeof errorValue.message === "string" && errorValue.message.trim()) {
+    return errorValue.message.trim();
+  }
+  return fallback;
+}
+
+function isValidTriggerStreamChunk(
+  chunk: unknown
+): chunk is
+  | { type: "reasoning-start"; id: string }
+  | { type: "reasoning-end"; id: string }
+  | { type: "text-start"; id: string }
+  | { type: "text-end"; id: string }
+  | { type: "reasoning-delta"; id: string; delta: string }
+  | { type: "text-delta"; id: string; delta: string } {
+  if (!isRecord(chunk) || typeof chunk.type !== "string" || typeof chunk.id !== "string") {
+    return false;
+  }
+  if (
+    chunk.type === "reasoning-start" ||
+    chunk.type === "reasoning-end" ||
+    chunk.type === "text-start" ||
+    chunk.type === "text-end"
+  ) {
+    return true;
+  }
+  if (
+    (chunk.type === "reasoning-delta" || chunk.type === "text-delta") &&
+    typeof chunk.delta === "string"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function parseTriggerStreamChunk(raw: unknown) {
+  const decoded = decodeFundChatRealtimeChunk(raw);
+  if (decoded) {
+    return decoded;
+  }
+  return isValidTriggerStreamChunk(raw) ? raw : null;
+}
+
+function getTriggerReadTimeoutSeconds() {
+  if (
+    Number.isFinite(TRIGGER_STREAM_READ_TIMEOUT_SECONDS) &&
+    TRIGGER_STREAM_READ_TIMEOUT_SECONDS > 0
+  ) {
+    return TRIGGER_STREAM_READ_TIMEOUT_SECONDS;
+  }
+  return 600;
+}
+
+function getTriggerPollIntervalMs() {
+  if (Number.isFinite(TRIGGER_STREAM_POLL_INTERVAL_MS) && TRIGGER_STREAM_POLL_INTERVAL_MS > 0) {
+    return TRIGGER_STREAM_POLL_INTERVAL_MS;
+  }
+  return 1000;
+}
+
+function getTriggerFirstChunkTimeoutMs() {
+  if (
+    Number.isFinite(TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS) &&
+    TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS > 0
+  ) {
+    return TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS;
+  }
+  return 10000;
+}
+
 
 function getCookieValue(cookieHeader: string | null, key: string): string {
   if (!cookieHeader) {
@@ -589,6 +608,145 @@ export async function POST(request: Request) {
           });
 
           dataStream.merge(result.toUIMessageStream({ sendReasoning: true }));
+        } else if (USE_TRIGGER_DEV) {
+          const userText = extractLatestUserText(requestBody);
+          if (!userText) {
+            throw new Error("No user text found in request");
+          }
+
+          const handle = await tasks.trigger<typeof fundChatTask>("fund-chat-task", {
+            userId: session.user.id,
+            chatId: id,
+            userText,
+            model: FIXED_CHAT_MODEL,
+            isNewChat: !chat,
+            turnstileToken: turnstileToken || undefined,
+          });
+          const runId = handle.id;
+          const taskInfo = [
+            "任务已提交，后台处理中。",
+            `任务ID: ${runId}`,
+            `查询进度: /api/tasks/${runId}`,
+            `[[task:${runId}]]`,
+          ].join("\n");
+          const taskInfoTextId = generateUUID();
+          let referenceText = taskInfo;
+          let fallbackToPolling = false;
+          let hasStreamedTriggerText = false;
+          let taskInfoClosed = false;
+
+          dataStream.write({ type: "text-start", id: taskInfoTextId });
+          dataStream.write({ type: "text-delta", id: taskInfoTextId, delta: taskInfo });
+
+          const appendTaskInfoText = (delta: string, referenceDelta = delta) => {
+            if (!delta) {
+              return;
+            }
+            dataStream.write({ type: "text-delta", id: taskInfoTextId, delta });
+            referenceText += referenceDelta;
+          };
+          const closeTaskInfoText = () => {
+            if (taskInfoClosed) {
+              return;
+            }
+            dataStream.write({ type: "text-end", id: taskInfoTextId });
+            taskInfoClosed = true;
+          };
+          const applyStreamChunk = (rawChunk: unknown) => {
+            const parsedChunk = parseTriggerStreamChunk(rawChunk);
+            if (!parsedChunk) {
+              return;
+            }
+
+            if (parsedChunk.type === "text-delta") {
+              if (!parsedChunk.delta) {
+                return;
+              }
+              const prefix = hasStreamedTriggerText ? "" : "\n\n";
+              appendTaskInfoText(`${prefix}${parsedChunk.delta}`);
+              hasStreamedTriggerText = true;
+              return;
+            }
+            if (parsedChunk.type === "text-start" || parsedChunk.type === "text-end") {
+              return;
+            }
+
+            dataStream.write(parsedChunk);
+          };
+
+          try {
+            try {
+              const streamChunks = await fundChatRealtimeStream.read(runId, {
+                timeoutInSeconds: getTriggerReadTimeoutSeconds(),
+                signal: request.signal,
+              });
+              for await (const rawChunk of streamChunks) {
+                applyStreamChunk(rawChunk);
+              }
+            } catch (streamError) {
+              const streamReadError =
+                streamError instanceof Error
+                  ? streamError
+                  : new Error(String(streamError || "Unknown Trigger stream error"));
+              console.error(`[chat-api] Trigger stream read failed for ${runId}:`, streamReadError);
+              fallbackToPolling = true;
+            }
+
+            if (!fallbackToPolling) {
+              const run = await runs.poll<typeof fundChatTask>(runId, {
+                pollIntervalMs: getTriggerPollIntervalMs(),
+              });
+
+              if (TRIGGER_FAILURE_STATUSES.has(run.status)) {
+                const runErrorMessage = extractRunErrorMessage(
+                  run.error,
+                  `Task failed with status ${run.status}`
+                );
+                throw new Error(`Trigger task failed (${run.status}): ${runErrorMessage}`);
+              }
+
+              let output = run.output as TriggerTaskOutput;
+              if (!output && (run as { outputPresignedUrl?: string }).outputPresignedUrl) {
+                const presigned = (run as { outputPresignedUrl?: string }).outputPresignedUrl;
+                if (presigned) {
+                  try {
+                    const fetched = await fetch(presigned);
+                    if (fetched.ok) {
+                      output = (await fetched.json()) as TriggerTaskOutput;
+                    }
+                  } catch {
+                    // ignore fetch errors and fallback to streamed text
+                  }
+                }
+              }
+
+              const normalizedOutput = normalizeTriggerTaskOutput(output);
+              const fallbackText = normalizedOutput.text;
+              const artifacts = normalizedOutput.artifacts;
+              const shouldEmitFallbackText = !hasStreamedTriggerText && fallbackText.trim();
+
+              if (shouldEmitFallbackText) {
+                const enrichedFallback = enrichAssistantText(fallbackText);
+                const prefix = referenceText.trim() ? "\n\n" : "";
+                appendTaskInfoText(`${prefix}${enrichedFallback}`, `${prefix}${fallbackText}`);
+                hasStreamedTriggerText = true;
+              }
+
+              if (artifacts.length > 0) {
+                const artifactsSectionRaw = appendArtifactsToText("", artifacts);
+                const artifactsSection = enrichAssistantText(artifactsSectionRaw);
+                const hasArtifactReference = artifacts.some((artifactPath) =>
+                  referenceText.includes(artifactPath)
+                );
+                if (!hasArtifactReference || !referenceText.includes("/api/artifacts?")) {
+                  const prefix = referenceText.trim() ? "\n\n" : "";
+                  appendTaskInfoText(`${prefix}${artifactsSection}`, `${prefix}${artifactsSectionRaw}`);
+                }
+              }
+            }
+          } finally {
+            closeTaskInfoText();
+          }
         } else {
           const userText = extractLatestUserText(requestBody);
           if (!userText) {
