@@ -177,7 +177,7 @@ export const ReasoningContent = memo(
       )}
       {...props}
     >
-      <div className="max-h-48 overflow-y-auto rounded-md border border-border/50 bg-muted/30 p-2.5 text-[11px] **:text-[11px] [&_li]:my-0 [&_ol]:my-1 [&_p]:my-0 [&_ul]:my-1">
+      <div className="max-h-48 overflow-y-auto rounded-md border border-border/50 bg-muted/30 p-2.5 text-[11px] **:text-[11px] [&_li]:my-0 [&_ol]:my-1 [&_p]:my-0 [&_ul]:my-1 whitespace-pre-wrap">
         <Streamdown>{children}</Streamdown>
       </div>
     </CollapsibleContent>
