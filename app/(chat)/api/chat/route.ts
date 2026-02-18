@@ -566,6 +566,7 @@ export async function POST(request: Request) {
       backend === "gateway"
         ? selectedChatModel || DEFAULT_CHAT_MODEL
         : FIXED_CHAT_MODEL;
+    let triggerAssistantTextForPersistence = "";
 
     const stream = createUIMessageStream({
       originalMessages: isToolApprovalFlow ? uiMessages : undefined,
@@ -634,6 +635,7 @@ export async function POST(request: Request) {
           let fallbackToPolling = false;
           let hasStreamedTriggerText = false;
           let taskInfoClosed = false;
+          triggerAssistantTextForPersistence = taskInfo;
 
           dataStream.write({ type: "text-start", id: taskInfoTextId });
           dataStream.write({ type: "text-delta", id: taskInfoTextId, delta: taskInfo });
@@ -644,6 +646,7 @@ export async function POST(request: Request) {
             }
             dataStream.write({ type: "text-delta", id: taskInfoTextId, delta });
             referenceText += referenceDelta;
+            triggerAssistantTextForPersistence += delta;
           };
           const closeTaskInfoText = () => {
             if (taskInfoClosed) {
@@ -772,42 +775,60 @@ export async function POST(request: Request) {
       },
       generateId: generateUUID,
       onFinish: async ({ messages: finishedMessages }) => {
-        if (isToolApprovalFlow && backend === "gateway") {
-          for (const finishedMsg of finishedMessages) {
-            const existingMsg = uiMessages.find((m) => m.id === finishedMsg.id);
-            if (existingMsg) {
-              await updateMessage({
-                id: finishedMsg.id,
-                parts: finishedMsg.parts,
-              });
-            } else {
-              await saveMessages({
-                messages: [
-                  {
-                    id: finishedMsg.id,
-                    role: finishedMsg.role,
-                    parts: finishedMsg.parts,
-                    createdAt: new Date(),
-                    attachments: [],
-                    chatId: id,
-                  },
-                ],
-              });
-            }
+        const existingMessageIds = new Set(uiMessages.map((message) => message.id));
+        let hasPersistedAssistantMessage = false;
+
+        for (const finishedMsg of finishedMessages) {
+          if (finishedMsg.role === "assistant") {
+            hasPersistedAssistantMessage = true;
           }
-          return;
+
+          if (existingMessageIds.has(finishedMsg.id)) {
+            await updateMessage({
+              id: finishedMsg.id,
+              parts: finishedMsg.parts,
+            });
+            continue;
+          }
+
+          await saveMessages({
+            messages: [
+              {
+                id: finishedMsg.id,
+                role: finishedMsg.role,
+                parts: finishedMsg.parts,
+                createdAt: new Date(),
+                attachments: [],
+                chatId: id,
+              },
+            ],
+          });
+          existingMessageIds.add(finishedMsg.id);
         }
 
-        if (finishedMessages.length > 0) {
+        if (
+          backend !== "gateway" &&
+          USE_TRIGGER_DEV &&
+          !hasPersistedAssistantMessage &&
+          triggerAssistantTextForPersistence.trim()
+        ) {
           await saveMessages({
-            messages: finishedMessages.map((currentMessage) => ({
-              id: currentMessage.id,
-              role: currentMessage.role,
-              parts: currentMessage.parts,
-              createdAt: new Date(),
-              attachments: [],
-              chatId: id,
-            })),
+            messages: [
+              {
+                id: generateUUID(),
+                role: "assistant",
+                parts: [
+                  {
+                    type: "text",
+                    text: triggerAssistantTextForPersistence,
+                    state: "done",
+                  },
+                ],
+                createdAt: new Date(),
+                attachments: [],
+                chatId: id,
+              },
+            ],
           });
         }
       },

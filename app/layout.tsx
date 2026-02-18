@@ -30,6 +30,10 @@ const geistMono = Geist_Mono({
 
 const LIGHT_THEME_COLOR = "hsl(0 0% 100%)";
 const DARK_THEME_COLOR = "hsl(240deg 10% 3.92%)";
+const UMAMI_WEBSITE_ID = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID?.trim();
+const UMAMI_SRC =
+  process.env.NEXT_PUBLIC_UMAMI_SRC?.trim() ||
+  "https://cloud.umami.is/script.js";
 const THEME_COLOR_SCRIPT = `\
 (function() {
   var html = document.documentElement;
@@ -70,6 +74,9 @@ export default function RootLayout({
             __html: THEME_COLOR_SCRIPT,
           }}
         />
+        {UMAMI_WEBSITE_ID ? (
+          <script data-website-id={UMAMI_WEBSITE_ID} defer src={UMAMI_SRC} />
+        ) : null}
       </head>
       <body className="antialiased">
         <ThemeProvider
