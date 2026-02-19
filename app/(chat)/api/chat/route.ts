@@ -571,6 +571,46 @@ export async function POST(request: Request) {
         ? selectedChatModel || DEFAULT_CHAT_MODEL
         : FIXED_CHAT_MODEL;
     let triggerAssistantTextForPersistence = "";
+    let persistedTriggerAssistantMessageId: string | null = null;
+    let triggerAssistantPersistedInExecute = false;
+
+    const persistTriggerAssistantSnapshot = async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return;
+      }
+
+      const parts = [
+        {
+          type: "text" as const,
+          text,
+          state: "done" as const,
+        },
+      ];
+
+      if (!persistedTriggerAssistantMessageId) {
+        persistedTriggerAssistantMessageId = generateUUID();
+        await saveMessages({
+          messages: [
+            {
+              id: persistedTriggerAssistantMessageId,
+              role: "assistant",
+              parts,
+              createdAt: new Date(),
+              attachments: [],
+              chatId: id,
+            },
+          ],
+        });
+      } else {
+        await updateMessage({
+          id: persistedTriggerAssistantMessageId,
+          parts,
+        });
+      }
+
+      triggerAssistantPersistedInExecute = true;
+    };
 
     const stream = createUIMessageStream({
       originalMessages: isToolApprovalFlow ? uiMessages : undefined,
@@ -640,6 +680,7 @@ export async function POST(request: Request) {
           let hasStreamedTriggerText = false;
           let taskInfoClosed = false;
           triggerAssistantTextForPersistence = taskInfo;
+          await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
 
           dataStream.write({ type: "text-start", id: taskInfoTextId });
           dataStream.write({ type: "text-delta", id: taskInfoTextId, delta: taskInfo });
@@ -753,6 +794,7 @@ export async function POST(request: Request) {
             }
           } finally {
             closeTaskInfoText();
+            await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
           }
         } else {
           const userText = extractLatestUserText(requestBody);
@@ -781,8 +823,15 @@ export async function POST(request: Request) {
       onFinish: async ({ messages: finishedMessages }) => {
         const existingMessageIds = new Set(uiMessages.map((message) => message.id));
         let hasPersistedAssistantMessage = false;
+        const skipFinishedAssistantPersistence =
+          backend !== "gateway" && USE_TRIGGER_DEV && triggerAssistantPersistedInExecute;
 
         for (const finishedMsg of finishedMessages) {
+          if (skipFinishedAssistantPersistence && finishedMsg.role === "assistant") {
+            hasPersistedAssistantMessage = true;
+            continue;
+          }
+
           if (finishedMsg.role === "assistant") {
             hasPersistedAssistantMessage = true;
           }
