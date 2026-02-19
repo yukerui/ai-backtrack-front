@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -31,38 +31,6 @@ import { MultimodalInput } from "./multimodal-input";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
-
-const runIdRegex = /run_[A-Za-z0-9]+/g;
-
-function buildTaskPendingText(runId: string) {
-  return [
-    "任务已提交，后台处理中。",
-    `任务ID: ${runId}`,
-    `查询进度: /api/tasks/${runId}`,
-    `[[task:${runId}]]`,
-  ].join("\n");
-}
-
-function hasInlineTaskReply(messages: ChatMessage[], runId: string) {
-  const pendingText = buildTaskPendingText(runId).trim();
-  for (const message of messages) {
-    if (message.role !== "assistant") {
-      continue;
-    }
-    for (const part of message.parts || []) {
-      if (part.type !== "text" || typeof part.text !== "string") {
-        continue;
-      }
-      if (!part.text.includes(runId)) {
-        continue;
-      }
-      if (part.text.trim() !== pendingText) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 export function Chat({
   id,
@@ -218,86 +186,6 @@ export function Chat({
   const query = searchParams.get("query");
 
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
-  const pendingRunsRef = useRef<Set<string>>(new Set());
-  const completedRunsRef = useRef<Set<string>>(new Set());
-
-  const pollRun = useCallback(
-    async (runId: string) => {
-      let attempts = 0;
-      const maxAttempts = 300;
-
-      const poll = async () => {
-        attempts += 1;
-        try {
-          const response = await fetch(`/api/tasks/${runId}`);
-          if (!response.ok) {
-            if (attempts < maxAttempts) {
-              setTimeout(poll, 2000);
-            } else {
-              pendingRunsRef.current.delete(runId);
-            }
-            return;
-          }
-          const data = (await response.json()) as {
-            isCompleted?: boolean;
-            isFailed?: boolean;
-            text?: string;
-            error?: string | null;
-          };
-
-          if (data.isCompleted) {
-            completedRunsRef.current.add(runId);
-            pendingRunsRef.current.delete(runId);
-            const outputText =
-              data.text?.trim() || "任务已完成，但没有返回内容。";
-            setMessages((current) => {
-              if (hasInlineTaskReply(current, runId)) {
-                return current;
-              }
-              return [
-                ...current,
-                {
-                  id: generateUUID(),
-                  role: "assistant",
-                  parts: [{ type: "text", text: outputText }],
-                },
-              ];
-            });
-            return;
-          }
-
-          if (data.isFailed) {
-            completedRunsRef.current.add(runId);
-            pendingRunsRef.current.delete(runId);
-            const errorText =
-              typeof data.error === "string" && data.error
-                ? data.error
-                : "任务执行失败，请稍后重试。";
-            setMessages((current) => [
-              ...current,
-              {
-                id: generateUUID(),
-                role: "assistant",
-                parts: [{ type: "text", text: errorText }],
-              },
-            ]);
-            return;
-          }
-        } catch {
-          // ignore and retry
-        }
-
-        if (attempts < maxAttempts) {
-          setTimeout(poll, 2000);
-        } else {
-          pendingRunsRef.current.delete(runId);
-        }
-      };
-
-      poll();
-    },
-    [setMessages]
-  );
 
   useEffect(() => {
     if (status === "submitted" || status === "streaming") {
@@ -315,42 +203,6 @@ export function Chat({
       hadInFlightRequestRef.current = false;
     }
   }, [status]);
-
-  useEffect(() => {
-    if (status === "submitted" || status === "streaming") {
-      return;
-    }
-
-    const found = new Set<string>();
-
-    for (const message of messages) {
-      if (message.role !== "assistant") {
-        continue;
-      }
-      for (const part of message.parts || []) {
-        if (part.type !== "text" || typeof part.text !== "string") {
-          continue;
-        }
-        const matches = part.text.match(runIdRegex);
-        if (matches) {
-          for (const match of matches) {
-            found.add(match);
-          }
-        }
-      }
-    }
-
-    for (const runId of found) {
-      if (completedRunsRef.current.has(runId)) {
-        continue;
-      }
-      if (pendingRunsRef.current.has(runId)) {
-        continue;
-      }
-      pendingRunsRef.current.add(runId);
-      pollRun(runId);
-    }
-  }, [messages, pollRun, status]);
 
   useEffect(() => {
     if (query && !hasAppendedQuery) {
