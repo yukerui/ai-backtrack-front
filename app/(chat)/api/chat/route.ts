@@ -41,7 +41,8 @@ import { decodeFundChatRealtimeChunk, fundChatRealtimeStream } from "@/trigger/s
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
-export const maxDuration = 1800;
+// Vercel Hobby plan limit: Serverless Function maxDuration must be <= 300s.
+export const maxDuration = 300;
 
 const DEFAULT_BACKEND = "claude_proxy";
 const FIXED_CHAT_MODEL =
@@ -59,6 +60,7 @@ const TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS = Number.parseInt(
   process.env.TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS || "10000",
   10
 );
+const CHAT_FUNCTION_TIMEOUT_SAFETY_BUFFER_SECONDS = 10;
 const TRIGGER_FAILURE_STATUSES = new Set([
   "FAILED",
   "CRASHED",
@@ -234,13 +236,15 @@ function parseTriggerStreamChunk(raw: unknown) {
 }
 
 function getTriggerReadTimeoutSeconds() {
+  const hardLimitSeconds = Math.max(1, maxDuration - CHAT_FUNCTION_TIMEOUT_SAFETY_BUFFER_SECONDS);
+
   if (
     Number.isFinite(TRIGGER_STREAM_READ_TIMEOUT_SECONDS) &&
     TRIGGER_STREAM_READ_TIMEOUT_SECONDS > 0
   ) {
-    return TRIGGER_STREAM_READ_TIMEOUT_SECONDS;
+    return Math.min(TRIGGER_STREAM_READ_TIMEOUT_SECONDS, hardLimitSeconds);
   }
-  return 1800;
+  return hardLimitSeconds;
 }
 
 function getTriggerPollIntervalMs() {
