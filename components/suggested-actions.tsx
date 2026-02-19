@@ -22,10 +22,10 @@ function PureSuggestedActions({
   onRequireVerification,
 }: SuggestedActionsProps) {
   const suggestedActions = [
-    "What are the advantages of using Next.js?",
-    "Write code to demonstrate Dijkstra's algorithm",
-    "Help me write an essay about Silicon Valley",
-    "What is the weather in San Francisco?",
+    "对比下513100和159501过去两年它的收益",
+    "513300当前的溢价是多少",
+    "我要在513100和513870之间切换，当513100与513870溢价差小于1时切换至513100，在溢价差大于3时切换至513870，回测下这个策略过去两年的收益",
+    "我现在持有513100，我想在它与其他那只ETF的溢价超过3%时切换，现在的情况下可以切换到哪个上面去"
   ];
 
   return (
