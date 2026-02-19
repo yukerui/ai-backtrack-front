@@ -41,14 +41,14 @@ import { decodeFundChatRealtimeChunk, fundChatRealtimeStream } from "@/trigger/s
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
-export const maxDuration = 300;
+export const maxDuration = 1800;
 
 const DEFAULT_BACKEND = "claude_proxy";
 const FIXED_CHAT_MODEL =
   process.env.CODEX_MODEL || process.env.CLAUDE_CODE_MODEL || "gpt-5-codex";
 const USE_TRIGGER_DEV = (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
 const TRIGGER_STREAM_READ_TIMEOUT_SECONDS = Number.parseInt(
-  process.env.TRIGGER_STREAM_READ_TIMEOUT_SECONDS || "600",
+  process.env.TRIGGER_STREAM_READ_TIMEOUT_SECONDS || "1800",
   10
 );
 const TRIGGER_STREAM_POLL_INTERVAL_MS = Number.parseInt(
@@ -240,7 +240,7 @@ function getTriggerReadTimeoutSeconds() {
   ) {
     return TRIGGER_STREAM_READ_TIMEOUT_SECONDS;
   }
-  return 600;
+  return 1800;
 }
 
 function getTriggerPollIntervalMs() {

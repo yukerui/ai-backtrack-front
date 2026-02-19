@@ -11,5 +11,5 @@ const projectRef = process.env.TRIGGER_PROJECT_REF || "proj_vjtmmmbsbpcyfsrwcruj
 export default defineConfig({
   project: projectRef,
   dirs: ["./trigger"],
-  maxDuration: 3600,
+  maxDuration: 1800,
 });
