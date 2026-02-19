@@ -12,6 +12,12 @@ const ARTIFACTS_TOKEN_TTL_MS = Number.parseInt(
   process.env.ARTIFACTS_TOKEN_TTL_MS || "3600000",
   10
 );
+const PUBLIC_BASE_URL =
+  process.env.PUBLIC_APP_URL ||
+  process.env.NEXT_PUBLIC_APP_URL ||
+  process.env.NEXTAUTH_URL ||
+  process.env.VERCEL_URL ||
+  "";
 
 function toBase64Url(input: Buffer | string) {
   const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input, "utf8");
@@ -78,9 +84,19 @@ function resolveArtifactPath(inputPath: string) {
 function toArtifactUrl(pathValue: string) {
   const resolved = resolveArtifactPath(pathValue);
   const token = signArtifactToken(resolved);
-  return token
+  const relativeUrl = token
     ? `/api/artifacts?token=${encodeURIComponent(token)}`
     : `/api/artifacts?path=${encodeURIComponent(resolved)}`;
+
+  if (!PUBLIC_BASE_URL) {
+    return relativeUrl;
+  }
+
+  const base = /^https?:\/\//i.test(PUBLIC_BASE_URL)
+    ? PUBLIC_BASE_URL
+    : `https://${PUBLIC_BASE_URL}`;
+
+  return `${base.replace(/\/+$/, "")}${relativeUrl}`;
 }
 
 export function enrichAssistantText(raw: string) {
@@ -88,7 +104,9 @@ export function enrichAssistantText(raw: string) {
     return raw;
   }
 
-  const pathRegex = /(?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(html|csv)/g;
+  const pathRegex = /(?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv)/g;
+  const barePathRegex =
+    /(^|[\s:：,，;；\(\)（）\[\]【】<>《》"'`])((?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv))(?![A-Za-z0-9._/-])/gm;
   const seen = new Set<string>();
 
   let text = raw
@@ -99,7 +117,8 @@ export function enrichAssistantText(raw: string) {
     .replace(
       /run\s+`open\s+[^`]+`\s+to\s+view\s+it\s+in\s+your\s+browser\.?/gi,
       "open it directly from the link below."
-    );
+    )
+    .replace(/\[Image\s*#\d+\]/gi, "");
 
   text = text.replace(
     /`((?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv))`/g,
@@ -109,6 +128,12 @@ export function enrichAssistantText(raw: string) {
       return `[\`${normalized}\`](${toArtifactUrl(normalized)})`;
     }
   );
+
+  text = text.replace(barePathRegex, (_, prefix, pathValue) => {
+    const normalized = String(pathValue);
+    seen.add(normalized);
+    return `${prefix}[${normalized}](${toArtifactUrl(normalized)})`;
+  });
 
   let match: RegExpExecArray | null = null;
   while ((match = pathRegex.exec(text)) !== null) {
