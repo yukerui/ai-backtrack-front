@@ -1,5 +1,5 @@
 {
-  "configPath": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-tb0QPx/trigger.config.mjs",
+  "configPath": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-gpJL5L/trigger.config.mjs",
   "customConditions": [
   ],
   "queues": [
@@ -8,10 +8,10 @@
   "runtimeVersion": "23.3.0",
   "tasks": [
     {
-      "entryPoint": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-tb0QPx/trigger/fund-chat-task.mjs",
+      "entryPoint": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-gpJL5L/trigger/fund-chat-task.mjs",
       "filePath": "trigger/fund-chat-task.ts",
       "id": "fund-chat-task",
-      "maxDuration": 3600,
+      "maxDuration": 1800,
       "payloadSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "additionalProperties": false,
@@ -46,8 +46,8 @@
     }
   ],
   "timings": {
-    "trigger/fund-chat-task.ts": 1.7612500000000182,
-    "trigger/streams.ts": 3.719291999999996
+    "trigger/fund-chat-task.ts": 1.1179999999999808,
+    "trigger/streams.ts": 0.39441600000000676
   },
-  "workerEntryPoint": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-tb0QPx/node_modules/.pnpm/trigger.dev@4.3.3_bufferutil@4.0.9_typescript@5.8.2/node_modules/trigger.dev/dist/esm/entryPoints/dev-run-worker.mjs"
+  "workerEntryPoint": "/Users/lovexl/yukerui/ai-chatbot/ai-chatbot/front/.trigger/tmp/build-gpJL5L/node_modules/.pnpm/trigger.dev@4.3.3_bufferutil@4.0.9_typescript@5.8.2/node_modules/trigger.dev/dist/esm/entryPoints/dev-run-worker.mjs"
 }
