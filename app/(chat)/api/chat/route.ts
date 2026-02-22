@@ -676,7 +676,6 @@ export async function POST(request: Request) {
           ].join("\n");
           const taskInfoTextId = generateUUID();
           let referenceText = taskInfo;
-          let fallbackToPolling = false;
           let hasStreamedTriggerText = false;
           let taskInfoClosed = false;
           triggerAssistantTextForPersistence = taskInfo;
@@ -737,59 +736,58 @@ export async function POST(request: Request) {
                   ? streamError
                   : new Error(String(streamError || "Unknown Trigger stream error"));
               console.error(`[chat-api] Trigger stream read failed for ${runId}:`, streamReadError);
-              fallbackToPolling = true;
             }
 
-            if (!fallbackToPolling) {
-              const run = await runs.poll<typeof fundChatTask>(runId, {
-                pollIntervalMs: getTriggerPollIntervalMs(),
-              });
+            // Always poll final run state, even when realtime stream read fails.
+            // Otherwise UI can get stuck at reasoning-only without final text.
+            const run = await runs.poll<typeof fundChatTask>(runId, {
+              pollIntervalMs: getTriggerPollIntervalMs(),
+            });
 
-              if (TRIGGER_FAILURE_STATUSES.has(run.status)) {
-                const runErrorMessage = extractRunErrorMessage(
-                  run.error,
-                  `Task failed with status ${run.status}`
-                );
-                throw new Error(`Trigger task failed (${run.status}): ${runErrorMessage}`);
-              }
+            if (TRIGGER_FAILURE_STATUSES.has(run.status)) {
+              const runErrorMessage = extractRunErrorMessage(
+                run.error,
+                `Task failed with status ${run.status}`
+              );
+              throw new Error(`Trigger task failed (${run.status}): ${runErrorMessage}`);
+            }
 
-              let output = run.output as TriggerTaskOutput;
-              if (!output && (run as { outputPresignedUrl?: string }).outputPresignedUrl) {
-                const presigned = (run as { outputPresignedUrl?: string }).outputPresignedUrl;
-                if (presigned) {
-                  try {
-                    const fetched = await fetch(presigned);
-                    if (fetched.ok) {
-                      output = (await fetched.json()) as TriggerTaskOutput;
-                    }
-                  } catch {
-                    // ignore fetch errors and fallback to streamed text
+            let output = run.output as TriggerTaskOutput;
+            if (!output && (run as { outputPresignedUrl?: string }).outputPresignedUrl) {
+              const presigned = (run as { outputPresignedUrl?: string }).outputPresignedUrl;
+              if (presigned) {
+                try {
+                  const fetched = await fetch(presigned);
+                  if (fetched.ok) {
+                    output = (await fetched.json()) as TriggerTaskOutput;
                   }
+                } catch {
+                  // ignore fetch errors and fallback to streamed text
                 }
               }
+            }
 
-              const normalizedOutput = normalizeTriggerTaskOutput(output);
-              const fallbackText = normalizedOutput.text;
-              const artifacts = normalizedOutput.artifacts;
-              const shouldEmitFallbackText = !hasStreamedTriggerText && fallbackText.trim();
+            const normalizedOutput = normalizeTriggerTaskOutput(output);
+            const fallbackText = normalizedOutput.text;
+            const artifacts = normalizedOutput.artifacts;
+            const shouldEmitFallbackText = !hasStreamedTriggerText && fallbackText.trim();
 
-              if (shouldEmitFallbackText) {
-                const enrichedFallback = enrichAssistantText(fallbackText);
+            if (shouldEmitFallbackText) {
+              const enrichedFallback = enrichAssistantText(fallbackText);
+              const prefix = referenceText.trim() ? "\n\n" : "";
+              appendTaskInfoText(`${prefix}${enrichedFallback}`, `${prefix}${fallbackText}`);
+              hasStreamedTriggerText = true;
+            }
+
+            if (artifacts.length > 0) {
+              const artifactsSectionRaw = appendArtifactsToText("", artifacts);
+              const artifactsSection = enrichAssistantText(artifactsSectionRaw);
+              const hasArtifactReference = artifacts.some((artifactPath) =>
+                referenceText.includes(artifactPath)
+              );
+              if (!hasArtifactReference || !referenceText.includes("/api/artifacts?")) {
                 const prefix = referenceText.trim() ? "\n\n" : "";
-                appendTaskInfoText(`${prefix}${enrichedFallback}`, `${prefix}${fallbackText}`);
-                hasStreamedTriggerText = true;
-              }
-
-              if (artifacts.length > 0) {
-                const artifactsSectionRaw = appendArtifactsToText("", artifacts);
-                const artifactsSection = enrichAssistantText(artifactsSectionRaw);
-                const hasArtifactReference = artifacts.some((artifactPath) =>
-                  referenceText.includes(artifactPath)
-                );
-                if (!hasArtifactReference || !referenceText.includes("/api/artifacts?")) {
-                  const prefix = referenceText.trim() ? "\n\n" : "";
-                  appendTaskInfoText(`${prefix}${artifactsSection}`, `${prefix}${artifactsSectionRaw}`);
-                }
+                appendTaskInfoText(`${prefix}${artifactsSection}`, `${prefix}${artifactsSectionRaw}`);
               }
             }
           } finally {
