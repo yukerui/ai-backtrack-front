@@ -279,6 +279,100 @@ function getCookieValue(cookieHeader: string | null, key: string): string {
   return "";
 }
 
+type ClaudeProxyPrecheckResult = {
+  allowed: boolean;
+  reason: string;
+  reply: string;
+};
+
+function parseTurnstileReason(message: string) {
+  const match = String(message || "").match(/Turnstile verification failed:\s*([a-zA-Z0-9_-]+)/i);
+  if (!match?.[1]) {
+    return "";
+  }
+  return match[1].toLowerCase();
+}
+
+async function precheckClaudeProxyInput({
+  chatId,
+  isNewChat,
+  userText,
+  turnstileToken,
+}: {
+  chatId: string;
+  isNewChat: boolean;
+  userText: string;
+  turnstileToken?: string;
+}): Promise<ClaudeProxyPrecheckResult> {
+  const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
+  const base = rawBase.replace(/\/+$/, "");
+  const token = process.env.CLAUDE_CODE_GATEWAY_TOKEN;
+  if (!token) {
+    throw new Error("Missing CLAUDE_CODE_GATEWAY_TOKEN");
+  }
+
+  const response = await fetch(`${base}/v1/policy/check`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+      "x-chat-id": chatId,
+      "x-chat-new": isNewChat ? "true" : "false",
+      ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
+    },
+    body: JSON.stringify({
+      text: userText,
+      turnstileToken: turnstileToken || undefined,
+      messages: [{ role: "user", content: userText }],
+    }),
+  });
+
+  const raw = await response.text().catch(() => "");
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    parsed = null;
+  }
+
+  const reason =
+    parsed && typeof parsed.reason === "string"
+      ? parsed.reason
+      : response.ok
+        ? "unknown"
+        : `http_${response.status}`;
+  const reply =
+    parsed && typeof parsed.reply === "string" && parsed.reply.trim()
+      ? parsed.reply
+      : parsed &&
+          typeof (parsed.error as { message?: unknown } | undefined)?.message === "string" &&
+          String((parsed.error as { message?: unknown }).message || "").trim()
+        ? String((parsed.error as { message?: unknown }).message)
+        : raw || response.statusText || "该请求当前未通过策略校验，请调整后重试。";
+
+  const turnstileReasonFromReason = reason.startsWith("turnstile_")
+    ? reason.slice("turnstile_".length)
+    : "";
+  const turnstileReasonFromMessage = parseTurnstileReason(reply);
+  const turnstileReason = turnstileReasonFromReason || turnstileReasonFromMessage;
+  if (turnstileReason) {
+    throw new Error(`turnstile_upstream:${turnstileReason}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Claude proxy precheck failed (${response.status}): ${reply || response.statusText}`
+    );
+  }
+
+  const allowed = parsed?.allowed === true;
+  return {
+    allowed,
+    reason,
+    reply: allowed ? "" : reply,
+  };
+}
+
 async function streamFromClaudeProxy({
   dataStream,
   chatId,
@@ -659,6 +753,28 @@ export async function POST(request: Request) {
             throw new Error("No user text found in request");
           }
 
+          const precheck = await precheckClaudeProxyInput({
+            chatId: id,
+            isNewChat: !chat,
+            userText,
+            turnstileToken,
+          });
+          if (!precheck.allowed) {
+            const blockedReply =
+              precheck.reply || "该请求当前未通过策略校验，请调整后重试。";
+            const blockedId = generateUUID();
+            dataStream.write({ type: "text-start", id: blockedId });
+            dataStream.write({
+              type: "text-delta",
+              id: blockedId,
+              delta: blockedReply,
+            });
+            dataStream.write({ type: "text-end", id: blockedId });
+            triggerAssistantTextForPersistence = blockedReply;
+            await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
+            return;
+          }
+
           const handle = await tasks.trigger<typeof fundChatTask>("fund-chat-task", {
             userId: session.user.id,
             chatId: id,
@@ -666,6 +782,7 @@ export async function POST(request: Request) {
             model: FIXED_CHAT_MODEL,
             isNewChat: !chat,
             turnstileToken: turnstileToken || undefined,
+            policyPrechecked: true,
           });
           const runId = handle.id;
           const taskInfo = [
@@ -887,6 +1004,12 @@ export async function POST(request: Request) {
         if (error instanceof Error) {
           if (error.message.startsWith("turnstile_upstream:")) {
             return "Turnstile 验证失败，请重新勾选后再发送。";
+          }
+          if (error.message.includes("Claude proxy precheck failed (429)")) {
+            return "请求过于频繁，请稍后重试。";
+          }
+          if (error.message.includes("Claude proxy precheck failed")) {
+            return "请求预校验失败，请稍后重试。";
           }
           if (error.message.includes("Claude proxy upstream failed (429)")) {
             return "请求过于频繁，请稍后重试。";

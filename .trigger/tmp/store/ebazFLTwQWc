@@ -25,7 +25,8 @@ var payloadSchema = external_exports.object({
   userText: external_exports.string().min(1),
   model: external_exports.string().optional(),
   isNewChat: external_exports.boolean().optional(),
-  turnstileToken: external_exports.string().optional()
+  turnstileToken: external_exports.string().optional(),
+  policyPrechecked: external_exports.boolean().optional()
 });
 var TASK_MAX_DURATION_SECONDS = Number.parseInt(
   process.env.TRIGGER_FUND_CHAT_MAX_DURATION_SECONDS || "1800",
@@ -221,7 +222,7 @@ var fundChatTask = schemaTask({
   id: "fund-chat-task",
   schema: payloadSchema,
   maxDuration: TASK_MAX_DURATION_SECONDS,
-  run: /* @__PURE__ */ __name(async ({ userId, chatId, userText, model, isNewChat, turnstileToken }, { signal }) => {
+  run: /* @__PURE__ */ __name(async ({ userId, chatId, userText, model, isNewChat, turnstileToken, policyPrechecked }, { signal }) => {
     const base = process.env.CLAUDE_CODE_API_BASE ? normalizeBase(process.env.CLAUDE_CODE_API_BASE) : "";
     const token = process.env.CLAUDE_CODE_GATEWAY_TOKEN || "";
     if (!base) {
@@ -243,6 +244,9 @@ var fundChatTask = schemaTask({
     }
     if (process.env.INTERNAL_TASK_KEY) {
       headers["x-internal-task-key"] = process.env.INTERNAL_TASK_KEY;
+      if (policyPrechecked) {
+        headers["x-policy-prechecked"] = "1";
+      }
     }
     const requestBody = JSON.stringify({
       model: model || "gpt-5-codex",

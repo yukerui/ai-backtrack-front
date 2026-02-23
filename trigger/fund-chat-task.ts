@@ -14,6 +14,7 @@ const payloadSchema = z.object({
   model: z.string().optional(),
   isNewChat: z.boolean().optional(),
   turnstileToken: z.string().optional(),
+  policyPrechecked: z.boolean().optional(),
 });
 
 const TASK_MAX_DURATION_SECONDS = Number.parseInt(
@@ -241,7 +242,7 @@ export const fundChatTask = schemaTask({
   schema: payloadSchema,
   maxDuration: TASK_MAX_DURATION_SECONDS,
   run: async (
-    { userId, chatId, userText, model, isNewChat, turnstileToken },
+    { userId, chatId, userText, model, isNewChat, turnstileToken, policyPrechecked },
     { signal }
   ) => {
     const base = process.env.CLAUDE_CODE_API_BASE
@@ -268,6 +269,9 @@ export const fundChatTask = schemaTask({
     }
     if (process.env.INTERNAL_TASK_KEY) {
       headers["x-internal-task-key"] = process.env.INTERNAL_TASK_KEY;
+      if (policyPrechecked) {
+        headers["x-policy-prechecked"] = "1";
+      }
     }
 
     const requestBody = JSON.stringify({
