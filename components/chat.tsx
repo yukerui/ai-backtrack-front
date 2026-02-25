@@ -43,7 +43,8 @@ type TaskStatusResponse = {
 };
 
 function extractMessageText(message: ChatMessage) {
-  return message.parts
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  return parts
     .filter((part) => part.type === "text")
     .map((part) => String((part as { text?: unknown }).text || ""))
     .join("\n");

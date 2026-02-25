@@ -135,8 +135,14 @@ export async function GET(
           if (item.role !== "assistant") {
             return false;
           }
-          const text = (item.parts || [])
-            .filter((part) => part.type === "text")
+          const parts = Array.isArray(item.parts) ? item.parts : [];
+          const text = parts
+            .filter(
+              (part) =>
+                typeof part === "object" &&
+                part !== null &&
+                (part as { type?: unknown }).type === "text"
+            )
             .map((part) => String((part as { text?: unknown }).text || ""))
             .join("\n");
           return text.includes(marker);
