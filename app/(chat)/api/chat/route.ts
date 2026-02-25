@@ -9,7 +9,7 @@ import {
 } from "ai";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
-import { tasks } from "@trigger.dev/sdk";
+import { runs, tasks } from "@trigger.dev/sdk";
 import { auth, type UserType } from "@/app/(auth)/auth";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
@@ -690,6 +690,150 @@ export async function POST(request: Request) {
             chatId: id,
             runPersistedTextLength: triggerAssistantTextForPersistence.length,
           });
+
+          // Finalize in background so UI refresh/disconnect does not leave the DB stuck on marker text.
+          after(async () => {
+            type RawTaskOutput =
+              | string
+              | {
+                  text?: unknown;
+                  artifacts?: unknown;
+                  [key: string]: unknown;
+                }
+              | null
+              | undefined;
+
+            const failureStatuses = new Set([
+              "FAILED",
+              "CRASHED",
+              "SYSTEM_FAILURE",
+              "TIMED_OUT",
+              "CANCELED",
+              "EXPIRED",
+            ]);
+
+            const isRecord = (value: unknown): value is Record<string, unknown> => {
+              return typeof value === "object" && value !== null && !Array.isArray(value);
+            };
+
+            const toArtifactList = (value: unknown) => {
+              if (!Array.isArray(value)) {
+                return [] as string[];
+              }
+              return value
+                .filter((item) => typeof item === "string")
+                .map((item) => String(item))
+                .filter((item) => item.length > 0);
+            };
+
+            const normalizeOutput = (raw: RawTaskOutput) => {
+              if (typeof raw === "string") {
+                try {
+                  const parsed = JSON.parse(raw) as unknown;
+                  return normalizeOutput(parsed as RawTaskOutput);
+                } catch {
+                  return { text: raw, artifacts: [] as string[] };
+                }
+              }
+
+              if (!isRecord(raw)) {
+                return { text: "", artifacts: [] as string[] };
+              }
+
+              const text = typeof raw.text === "string" ? raw.text : "";
+              const artifacts = toArtifactList(raw.artifacts);
+
+              if (text) {
+                return { text, artifacts };
+              }
+
+              return {
+                text: `\`\`\`json\n${JSON.stringify(raw, null, 2)}\n\`\`\``,
+                artifacts,
+              };
+            };
+
+            const appendArtifactsToText = (text: string, artifacts: string[]) => {
+              if (artifacts.length === 0) {
+                return text;
+              }
+              const missing = artifacts.filter((artifactPath) => !text.includes(artifactPath));
+              if (missing.length === 0) {
+                return text;
+              }
+              const lines = missing.map((artifactPath) => `- \`${artifactPath}\``).join("\n");
+              const prefix = text.trim() ? `${text.trim()}\n\n` : "";
+              return `${prefix}资源\n${lines}`;
+            };
+
+            try {
+              const run = await runs.poll<typeof fundChatTask>(runId, {
+                pollIntervalMs: 1500,
+              });
+
+              const marker = `[[task:${runId}]]`;
+              const messages = await getMessagesByChatId({ id });
+              const pendingMessage = [...messages]
+                .reverse()
+                .find((item) => {
+                  if (item.role !== "assistant") {
+                    return false;
+                  }
+                  const parts = Array.isArray(item.parts) ? item.parts : [];
+                  const text = parts
+                    .filter(
+                      (part) =>
+                        typeof part === "object" &&
+                        part !== null &&
+                        (part as { type?: unknown }).type === "text"
+                    )
+                    .map((part) => String((part as { text?: unknown }).text || ""))
+                    .join("\n");
+                  return text.includes(marker);
+                });
+
+              if (!pendingMessage) {
+                return;
+              }
+
+              if (run.status !== "COMPLETED") {
+                if (failureStatuses.has(run.status)) {
+                  await updateMessage({
+                    id: pendingMessage.id,
+                    parts: [{ type: "text", text: `任务执行失败：${run.status}`, state: "done" }],
+                  });
+                }
+                return;
+              }
+
+              let output = run.output as RawTaskOutput;
+              if (!output && (run as { outputPresignedUrl?: string }).outputPresignedUrl) {
+                const presigned = (run as { outputPresignedUrl?: string }).outputPresignedUrl;
+                if (presigned) {
+                  try {
+                    const fetched = await fetch(presigned);
+                    if (fetched.ok) {
+                      output = (await fetched.json()) as RawTaskOutput;
+                    }
+                  } catch {
+                    // ignore fetch errors
+                  }
+                }
+              }
+
+              const normalized = normalizeOutput(output);
+              const withArtifacts = appendArtifactsToText(normalized.text, normalized.artifacts);
+              const enriched = enrichAssistantText(withArtifacts);
+
+              await updateMessage({
+                id: pendingMessage.id,
+                parts: [{ type: "text", text: enriched, state: "done" }],
+              });
+            } catch (persistError) {
+              console.error(`[chat-api] Failed to finalize Trigger run ${runId}:`, persistError);
+            }
+          });
+
           chatDebug("trigger_return_immediately", { runId });
           return;
         } else {

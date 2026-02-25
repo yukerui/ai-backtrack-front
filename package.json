@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbo",
-    "build": "next build",
-    "build:with-migrate": "tsx lib/db/migrate && next build",
+    "build": "echo [DISABLED] next build is disabled on this host to protect service performance. && exit 1",
+    "build:with-migrate": "echo [DISABLED] next build is disabled on this host to protect service performance. && exit 1",
     "start": "next start",
     "lint": "ultracite check",
     "format": "ultracite fix",

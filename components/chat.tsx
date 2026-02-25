@@ -45,7 +45,7 @@ type TaskStatusResponse = {
 function extractMessageText(message: ChatMessage) {
   const parts = Array.isArray(message.parts) ? message.parts : [];
   return parts
-    .filter((part) => part.type === "text")
+    .filter((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text")
     .map((part) => String((part as { text?: unknown }).text || ""))
     .join("\n");
 }
@@ -269,7 +269,8 @@ export function Chat({
           }
 
           const payload = (await response.json()) as TaskStatusResponse;
-          if (payload.isCompleted && typeof payload.text === "string") {
+          const completedTextValue = typeof payload.text === "string" ? payload.text : "";
+          if (payload.isCompleted) {
             setMessages((current) =>
               current.map((msg) => {
                 if (msg.id !== messageId) {
@@ -277,7 +278,7 @@ export function Chat({
                 }
                 return {
                   ...msg,
-                  parts: [{ type: "text", text: payload.text }],
+                  parts: [{ type: "text", text: completedTextValue }],
                 };
               })
             );
