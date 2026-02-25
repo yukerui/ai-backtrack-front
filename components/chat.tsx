@@ -32,6 +32,29 @@ import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
 
+const TASK_MARKER_REGEX = /\[\[task:([A-Za-z0-9_-]+)\]\]/;
+const TASK_POLL_INTERVAL_MS = 2000;
+
+type TaskStatusResponse = {
+  status: string;
+  isCompleted: boolean;
+  isFailed?: boolean;
+  text?: string;
+};
+
+function extractMessageText(message: ChatMessage) {
+  return message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => String((part as { text?: unknown }).text || ""))
+    .join("\n");
+}
+
+function extractTaskRunIdFromMessage(message: ChatMessage) {
+  const text = extractMessageText(message);
+  const match = text.match(TASK_MARKER_REGEX);
+  return match?.[1] || "";
+}
+
 export function Chat({
   id,
   initialMessages,
@@ -73,6 +96,7 @@ export function Chat({
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetNonce, setTurnstileResetNonce] = useState(0);
   const hadInFlightRequestRef = useRef(false);
+  const pollingRunIdsRef = useRef<Set<string>>(new Set());
   const turnstileTokenRef = useRef("");
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
 
@@ -218,6 +242,89 @@ export function Chat({
       window.history.replaceState({}, "", `/chat/${id}`);
     }
   }, [query, sendMessage, hasAppendedQuery, id, turnstileSiteKey, turnstileToken]);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const startPollingRun = (runId: string, messageId: string) => {
+      if (!runId || pollingRunIdsRef.current.has(runId)) {
+        return;
+      }
+      pollingRunIdsRef.current.add(runId);
+
+      const poll = async () => {
+        if (disposed) {
+          pollingRunIdsRef.current.delete(runId);
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/tasks/${runId}`, {
+            method: "GET",
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            throw new Error(`Task status fetch failed (${response.status})`);
+          }
+
+          const payload = (await response.json()) as TaskStatusResponse;
+          if (payload.isCompleted && typeof payload.text === "string") {
+            setMessages((current) =>
+              current.map((msg) => {
+                if (msg.id !== messageId) {
+                  return msg;
+                }
+                return {
+                  ...msg,
+                  parts: [{ type: "text", text: payload.text }],
+                };
+              })
+            );
+            pollingRunIdsRef.current.delete(runId);
+            mutate(unstable_serialize(getChatHistoryPaginationKey));
+            return;
+          }
+
+          if (payload.isFailed) {
+            setMessages((current) =>
+              current.map((msg) => {
+                if (msg.id !== messageId) {
+                  return msg;
+                }
+                return {
+                  ...msg,
+                  parts: [{ type: "text", text: `任务执行失败：${payload.status}` }],
+                };
+              })
+            );
+            pollingRunIdsRef.current.delete(runId);
+            return;
+          }
+        } catch (error) {
+          console.error(`[chat-ui] Task poll failed for ${runId}:`, error);
+        }
+
+        window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+      };
+
+      window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+    };
+
+    for (const message of messages) {
+      if (message.role !== "assistant") {
+        continue;
+      }
+      const runId = extractTaskRunIdFromMessage(message);
+      if (!runId) {
+        continue;
+      }
+      startPollingRun(runId, message.id);
+    }
+
+    return () => {
+      disposed = true;
+    };
+  }, [messages, setMessages, mutate]);
 
   const { data: votes } = useSWR<Vote[]>(
     messages.length >= 2 ? `/api/vote?chatId=${id}` : null,

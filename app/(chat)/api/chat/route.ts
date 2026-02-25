@@ -9,7 +9,7 @@ import {
 } from "ai";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
-import { runs, tasks } from "@trigger.dev/sdk";
+import { tasks } from "@trigger.dev/sdk";
 import { auth, type UserType } from "@/app/(auth)/auth";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
@@ -37,7 +37,6 @@ import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
-import { decodeFundChatRealtimeChunk, fundChatRealtimeStream } from "@/trigger/streams";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -48,28 +47,7 @@ const DEFAULT_BACKEND = "claude_proxy";
 const FIXED_CHAT_MODEL =
   process.env.CODEX_MODEL || process.env.CLAUDE_CODE_MODEL || "gpt-5-codex";
 const USE_TRIGGER_DEV = (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
-const TRIGGER_STREAM_READ_TIMEOUT_SECONDS = Number.parseInt(
-  process.env.TRIGGER_STREAM_READ_TIMEOUT_SECONDS || "1800",
-  10
-);
-const TRIGGER_STREAM_POLL_INTERVAL_MS = Number.parseInt(
-  process.env.TRIGGER_STREAM_POLL_INTERVAL_MS || "1000",
-  10
-);
-const TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS = Number.parseInt(
-  process.env.TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS || "10000",
-  10
-);
 const CHAT_API_DEBUG_VERBOSE = (process.env.CHAT_API_DEBUG_VERBOSE || "false").toLowerCase() === "true";
-const CHAT_FUNCTION_TIMEOUT_SAFETY_BUFFER_SECONDS = 10;
-const TRIGGER_FAILURE_STATUSES = new Set([
-  "FAILED",
-  "CRASHED",
-  "SYSTEM_FAILURE",
-  "TIMED_OUT",
-  "CANCELED",
-  "EXPIRED",
-]);
 
 function getStreamContext() {
   try {
@@ -127,142 +105,6 @@ function extractLatestUserText(body: PostRequestBody) {
   }
 
   return "";
-}
-
-type TriggerTaskOutput =
-  | string
-  | {
-      text?: unknown;
-      artifacts?: unknown;
-      [key: string]: unknown;
-    }
-  | null
-  | undefined;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function toArtifactList(value: unknown) {
-  if (!Array.isArray(value)) {
-    return [] as string[];
-  }
-  return value
-    .filter((item) => typeof item === "string")
-    .map((item) => String(item))
-    .filter((item) => item.length > 0);
-}
-
-function normalizeTriggerTaskOutput(raw: TriggerTaskOutput) {
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      return normalizeTriggerTaskOutput(parsed as TriggerTaskOutput);
-    } catch {
-      return { text: raw, artifacts: [] as string[] };
-    }
-  }
-
-  if (!isRecord(raw)) {
-    return { text: "", artifacts: [] as string[] };
-  }
-
-  const text = typeof raw.text === "string" ? raw.text : "";
-  const artifacts = toArtifactList(raw.artifacts);
-
-  if (text) {
-    return { text, artifacts };
-  }
-
-  return {
-    text: `\`\`\`json\n${JSON.stringify(raw, null, 2)}\n\`\`\``,
-    artifacts,
-  };
-}
-
-function appendArtifactsToText(text: string, artifacts: string[]) {
-  if (artifacts.length === 0) {
-    return text;
-  }
-  const lines = artifacts.map((artifactPath) => `- \`${artifactPath}\``).join("\n");
-  const prefix = text.trim() ? `${text.trim()}\n\n` : "";
-  return `${prefix}资源\n${lines}`;
-}
-
-function extractRunErrorMessage(errorValue: unknown, fallback: string) {
-  if (typeof errorValue === "string" && errorValue.trim()) {
-    return errorValue.trim();
-  }
-  if (isRecord(errorValue) && typeof errorValue.message === "string" && errorValue.message.trim()) {
-    return errorValue.message.trim();
-  }
-  return fallback;
-}
-
-function isValidTriggerStreamChunk(
-  chunk: unknown
-): chunk is
-  | { type: "reasoning-start"; id: string }
-  | { type: "reasoning-end"; id: string }
-  | { type: "text-start"; id: string }
-  | { type: "text-end"; id: string }
-  | { type: "reasoning-delta"; id: string; delta: string }
-  | { type: "text-delta"; id: string; delta: string } {
-  if (!isRecord(chunk) || typeof chunk.type !== "string" || typeof chunk.id !== "string") {
-    return false;
-  }
-  if (
-    chunk.type === "reasoning-start" ||
-    chunk.type === "reasoning-end" ||
-    chunk.type === "text-start" ||
-    chunk.type === "text-end"
-  ) {
-    return true;
-  }
-  if (
-    (chunk.type === "reasoning-delta" || chunk.type === "text-delta") &&
-    typeof chunk.delta === "string"
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function parseTriggerStreamChunk(raw: unknown) {
-  const decoded = decodeFundChatRealtimeChunk(raw);
-  if (decoded) {
-    return decoded;
-  }
-  return isValidTriggerStreamChunk(raw) ? raw : null;
-}
-
-function getTriggerReadTimeoutSeconds() {
-  const hardLimitSeconds = Math.max(1, maxDuration - CHAT_FUNCTION_TIMEOUT_SAFETY_BUFFER_SECONDS);
-
-  if (
-    Number.isFinite(TRIGGER_STREAM_READ_TIMEOUT_SECONDS) &&
-    TRIGGER_STREAM_READ_TIMEOUT_SECONDS > 0
-  ) {
-    return Math.min(TRIGGER_STREAM_READ_TIMEOUT_SECONDS, hardLimitSeconds);
-  }
-  return hardLimitSeconds;
-}
-
-function getTriggerPollIntervalMs() {
-  if (Number.isFinite(TRIGGER_STREAM_POLL_INTERVAL_MS) && TRIGGER_STREAM_POLL_INTERVAL_MS > 0) {
-    return TRIGGER_STREAM_POLL_INTERVAL_MS;
-  }
-  return 1000;
-}
-
-function getTriggerFirstChunkTimeoutMs() {
-  if (
-    Number.isFinite(TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS) &&
-    TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS > 0
-  ) {
-    return TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS;
-  }
-  return 10000;
 }
 
 function chatDebug(event: string, payload?: Record<string, unknown>) {
@@ -817,9 +659,6 @@ export async function POST(request: Request) {
           chatDebug("trigger_task_submitted", {
             chatId: id,
             runId,
-            timeoutSeconds: getTriggerReadTimeoutSeconds(),
-            pollIntervalMs: getTriggerPollIntervalMs(),
-            firstChunkTimeoutMs: getTriggerFirstChunkTimeoutMs(),
           });
           const taskInfo = [
             "任务已提交，后台处理中。",
@@ -828,8 +667,6 @@ export async function POST(request: Request) {
             `[[task:${runId}]]`,
           ].join("\n");
           const taskInfoTextId = generateUUID();
-          let referenceText = taskInfo;
-          let hasStreamedTriggerText = false;
           let taskInfoClosed = false;
           triggerAssistantTextForPersistence = taskInfo;
           await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
@@ -837,14 +674,6 @@ export async function POST(request: Request) {
           dataStream.write({ type: "text-start", id: taskInfoTextId });
           dataStream.write({ type: "text-delta", id: taskInfoTextId, delta: taskInfo });
 
-          const appendTaskInfoText = (delta: string, referenceDelta = delta) => {
-            if (!delta) {
-              return;
-            }
-            dataStream.write({ type: "text-delta", id: taskInfoTextId, delta });
-            referenceText += referenceDelta;
-            triggerAssistantTextForPersistence += delta;
-          };
           const closeTaskInfoText = () => {
             if (taskInfoClosed) {
               return;
@@ -852,139 +681,17 @@ export async function POST(request: Request) {
             dataStream.write({ type: "text-end", id: taskInfoTextId });
             taskInfoClosed = true;
           };
-          const applyStreamChunk = (rawChunk: unknown) => {
-            const parsedChunk = parseTriggerStreamChunk(rawChunk);
-            if (!parsedChunk) {
-              chatDebug("trigger_chunk_ignored", {
-                runId,
-                rawType: typeof rawChunk,
-              });
-              return;
-            }
 
-            if (parsedChunk.type === "text-delta") {
-              if (!parsedChunk.delta) {
-                return;
-              }
-              const prefix = hasStreamedTriggerText ? "" : "\n\n";
-              appendTaskInfoText(`${prefix}${parsedChunk.delta}`);
-              hasStreamedTriggerText = true;
-              chatDebug("trigger_text_delta", {
-                runId,
-                deltaLength: parsedChunk.delta.length,
-              });
-              return;
-            }
-            if (parsedChunk.type === "text-start" || parsedChunk.type === "text-end") {
-              chatDebug("trigger_text_marker", {
-                runId,
-                type: parsedChunk.type,
-              });
-              return;
-            }
-
-            chatDebug("trigger_reasoning_chunk", {
-              runId,
-              type: parsedChunk.type,
-              deltaLength: "delta" in parsedChunk ? parsedChunk.delta.length : 0,
-            });
-            dataStream.write(parsedChunk);
-          };
-
-          try {
-            try {
-              const streamChunks = await fundChatRealtimeStream.read(runId, {
-                timeoutInSeconds: getTriggerReadTimeoutSeconds(),
-                signal: request.signal,
-              });
-              chatDebug("trigger_stream_read_started", { runId });
-              for await (const rawChunk of streamChunks) {
-                applyStreamChunk(rawChunk);
-              }
-              chatDebug("trigger_stream_read_completed", { runId });
-            } catch (streamError) {
-              const streamReadError =
-                streamError instanceof Error
-                  ? streamError
-                  : new Error(String(streamError || "Unknown Trigger stream error"));
-              console.error(`[chat-api] Trigger stream read failed for ${runId}:`, streamReadError);
-              chatDebug("trigger_stream_read_failed", {
-                runId,
-                message: streamReadError.message,
-              });
-            }
-
-            // Always poll final run state, even when realtime stream read fails.
-            // Otherwise UI can get stuck at reasoning-only without final text.
-            const run = await runs.poll<typeof fundChatTask>(runId, {
-              pollIntervalMs: getTriggerPollIntervalMs(),
-            });
-            chatDebug("trigger_run_polled", {
-              runId,
-              status: run.status,
-            });
-
-            if (TRIGGER_FAILURE_STATUSES.has(run.status)) {
-              const runErrorMessage = extractRunErrorMessage(
-                run.error,
-                `Task failed with status ${run.status}`
-              );
-              throw new Error(`Trigger task failed (${run.status}): ${runErrorMessage}`);
-            }
-
-            let output = run.output as TriggerTaskOutput;
-            if (!output && (run as { outputPresignedUrl?: string }).outputPresignedUrl) {
-              const presigned = (run as { outputPresignedUrl?: string }).outputPresignedUrl;
-              if (presigned) {
-                try {
-                  const fetched = await fetch(presigned);
-                  if (fetched.ok) {
-                    output = (await fetched.json()) as TriggerTaskOutput;
-                  }
-                } catch {
-                  // ignore fetch errors and fallback to streamed text
-                }
-              }
-            }
-
-            const normalizedOutput = normalizeTriggerTaskOutput(output);
-            const fallbackText = normalizedOutput.text;
-            const artifacts = normalizedOutput.artifacts;
-            const shouldEmitFallbackText = !hasStreamedTriggerText && fallbackText.trim();
-            chatDebug("trigger_output_normalized", {
-              runId,
-              fallbackTextLength: fallbackText.length,
-              artifactsCount: artifacts.length,
-              hasStreamedTriggerText,
-              shouldEmitFallbackText: Boolean(shouldEmitFallbackText),
-            });
-
-            if (shouldEmitFallbackText) {
-              const enrichedFallback = enrichAssistantText(fallbackText);
-              const prefix = referenceText.trim() ? "\n\n" : "";
-              appendTaskInfoText(`${prefix}${enrichedFallback}`, `${prefix}${fallbackText}`);
-              hasStreamedTriggerText = true;
-            }
-
-            if (artifacts.length > 0) {
-              const artifactsSectionRaw = appendArtifactsToText("", artifacts);
-              const artifactsSection = enrichAssistantText(artifactsSectionRaw);
-              const hasArtifactReference = artifacts.some((artifactPath) =>
-                referenceText.includes(artifactPath)
-              );
-              if (!hasArtifactReference || !referenceText.includes("/api/artifacts?")) {
-                const prefix = referenceText.trim() ? "\n\n" : "";
-                appendTaskInfoText(`${prefix}${artifactsSection}`, `${prefix}${artifactsSectionRaw}`);
-              }
-            }
-          } finally {
-            closeTaskInfoText();
-            await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
-            chatDebug("trigger_snapshot_persisted", {
-              chatId: id,
-              runPersistedTextLength: triggerAssistantTextForPersistence.length,
-            });
-          }
+          // Important: return immediately after enqueueing Trigger task.
+          // Waiting for stream/poll here can hit Vercel maxDuration and timeout.
+          closeTaskInfoText();
+          await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
+          chatDebug("trigger_snapshot_persisted", {
+            chatId: id,
+            runPersistedTextLength: triggerAssistantTextForPersistence.length,
+          });
+          chatDebug("trigger_return_immediately", { runId });
+          return;
         } else {
           const userText = extractLatestUserText(requestBody);
           if (!userText) {

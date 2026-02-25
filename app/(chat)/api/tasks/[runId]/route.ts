@@ -3,6 +3,7 @@ import { auth } from "@/app/(auth)/auth";
 import { runs } from "@trigger.dev/sdk";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
 import { enrichAssistantText } from "@/lib/artifacts";
+import { getMessagesByChatId, updateMessage } from "@/lib/db/queries";
 
 type RawTaskOutput =
   | string
@@ -122,6 +123,41 @@ export async function GET(
   const normalized = normalizeOutput(output);
   const withArtifacts = appendArtifactsToText(normalized.text, normalized.artifacts);
   const enriched = enrichAssistantText(withArtifacts);
+  const chatId = (run.payload as { chatId?: string } | null)?.chatId;
+
+  if (chatId) {
+    try {
+      const marker = `[[task:${runId}]]`;
+      const messages = await getMessagesByChatId({ id: chatId });
+      const pendingMessage = [...messages]
+        .reverse()
+        .find((item) => {
+          if (item.role !== "assistant") {
+            return false;
+          }
+          const text = (item.parts || [])
+            .filter((part) => part.type === "text")
+            .map((part) => String((part as { text?: unknown }).text || ""))
+            .join("\n");
+          return text.includes(marker);
+        });
+
+      if (pendingMessage) {
+        await updateMessage({
+          id: pendingMessage.id,
+          parts: [
+            {
+              type: "text",
+              text: enriched,
+              state: "done",
+            },
+          ],
+        });
+      }
+    } catch (persistError) {
+      console.error(`[tasks-api] Failed to persist run output for ${runId}:`, persistError);
+    }
+  }
 
   return NextResponse.json({
     status: run.status,
