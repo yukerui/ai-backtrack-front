@@ -60,6 +60,7 @@ const TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS = Number.parseInt(
   process.env.TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS || "10000",
   10
 );
+const CHAT_API_DEBUG_VERBOSE = (process.env.CHAT_API_DEBUG_VERBOSE || "false").toLowerCase() === "true";
 const CHAT_FUNCTION_TIMEOUT_SAFETY_BUFFER_SECONDS = 10;
 const TRIGGER_FAILURE_STATUSES = new Set([
   "FAILED",
@@ -262,6 +263,17 @@ function getTriggerFirstChunkTimeoutMs() {
     return TRIGGER_STREAM_FIRST_CHUNK_TIMEOUT_MS;
   }
   return 10000;
+}
+
+function chatDebug(event: string, payload?: Record<string, unknown>) {
+  if (!CHAT_API_DEBUG_VERBOSE) {
+    return;
+  }
+  if (payload) {
+    console.log(`[chat-api][debug] ${event}`, payload);
+    return;
+  }
+  console.log(`[chat-api][debug] ${event}`);
 }
 
 
@@ -551,6 +563,12 @@ export async function POST(request: Request) {
       selectedChatModel,
       selectedVisibilityType,
     } = requestBody;
+    chatDebug("post_received", {
+      chatId: id,
+      hasSingleMessage: Boolean(message),
+      messageCount: Array.isArray(messages) ? messages.length : 0,
+      selectedChatModel: selectedChatModel || "",
+    });
 
     const session = await auth();
 
@@ -640,6 +658,12 @@ export async function POST(request: Request) {
         request.headers.get("x-turnstile-token") || request.headers.get("cf-turnstile-response")
       )} body=${Boolean(turnstileTokenFromBody)} cookie=${Boolean(turnstileTokenFromCookie)}`
     );
+    chatDebug("backend_selected", {
+      backend,
+      useTriggerDev: USE_TRIGGER_DEV,
+      isToolApprovalFlow,
+      hasTurnstileToken: Boolean(turnstileToken),
+    });
     if (backend === "claude_proxy" && !turnstileToken) {
       return Response.json(
         {
@@ -759,6 +783,11 @@ export async function POST(request: Request) {
             userText,
             turnstileToken,
           });
+          chatDebug("trigger_precheck_done", {
+            chatId: id,
+            allowed: precheck.allowed,
+            reason: precheck.reason,
+          });
           if (!precheck.allowed) {
             const blockedReply =
               precheck.reply || "该请求当前未通过策略校验，请调整后重试。";
@@ -785,6 +814,13 @@ export async function POST(request: Request) {
             policyPrechecked: true,
           });
           const runId = handle.id;
+          chatDebug("trigger_task_submitted", {
+            chatId: id,
+            runId,
+            timeoutSeconds: getTriggerReadTimeoutSeconds(),
+            pollIntervalMs: getTriggerPollIntervalMs(),
+            firstChunkTimeoutMs: getTriggerFirstChunkTimeoutMs(),
+          });
           const taskInfo = [
             "任务已提交，后台处理中。",
             `任务ID: ${runId}`,
@@ -819,6 +855,10 @@ export async function POST(request: Request) {
           const applyStreamChunk = (rawChunk: unknown) => {
             const parsedChunk = parseTriggerStreamChunk(rawChunk);
             if (!parsedChunk) {
+              chatDebug("trigger_chunk_ignored", {
+                runId,
+                rawType: typeof rawChunk,
+              });
               return;
             }
 
@@ -829,12 +869,25 @@ export async function POST(request: Request) {
               const prefix = hasStreamedTriggerText ? "" : "\n\n";
               appendTaskInfoText(`${prefix}${parsedChunk.delta}`);
               hasStreamedTriggerText = true;
+              chatDebug("trigger_text_delta", {
+                runId,
+                deltaLength: parsedChunk.delta.length,
+              });
               return;
             }
             if (parsedChunk.type === "text-start" || parsedChunk.type === "text-end") {
+              chatDebug("trigger_text_marker", {
+                runId,
+                type: parsedChunk.type,
+              });
               return;
             }
 
+            chatDebug("trigger_reasoning_chunk", {
+              runId,
+              type: parsedChunk.type,
+              deltaLength: "delta" in parsedChunk ? parsedChunk.delta.length : 0,
+            });
             dataStream.write(parsedChunk);
           };
 
@@ -844,21 +897,31 @@ export async function POST(request: Request) {
                 timeoutInSeconds: getTriggerReadTimeoutSeconds(),
                 signal: request.signal,
               });
+              chatDebug("trigger_stream_read_started", { runId });
               for await (const rawChunk of streamChunks) {
                 applyStreamChunk(rawChunk);
               }
+              chatDebug("trigger_stream_read_completed", { runId });
             } catch (streamError) {
               const streamReadError =
                 streamError instanceof Error
                   ? streamError
                   : new Error(String(streamError || "Unknown Trigger stream error"));
               console.error(`[chat-api] Trigger stream read failed for ${runId}:`, streamReadError);
+              chatDebug("trigger_stream_read_failed", {
+                runId,
+                message: streamReadError.message,
+              });
             }
 
             // Always poll final run state, even when realtime stream read fails.
             // Otherwise UI can get stuck at reasoning-only without final text.
             const run = await runs.poll<typeof fundChatTask>(runId, {
               pollIntervalMs: getTriggerPollIntervalMs(),
+            });
+            chatDebug("trigger_run_polled", {
+              runId,
+              status: run.status,
             });
 
             if (TRIGGER_FAILURE_STATUSES.has(run.status)) {
@@ -888,6 +951,13 @@ export async function POST(request: Request) {
             const fallbackText = normalizedOutput.text;
             const artifacts = normalizedOutput.artifacts;
             const shouldEmitFallbackText = !hasStreamedTriggerText && fallbackText.trim();
+            chatDebug("trigger_output_normalized", {
+              runId,
+              fallbackTextLength: fallbackText.length,
+              artifactsCount: artifacts.length,
+              hasStreamedTriggerText,
+              shouldEmitFallbackText: Boolean(shouldEmitFallbackText),
+            });
 
             if (shouldEmitFallbackText) {
               const enrichedFallback = enrichAssistantText(fallbackText);
@@ -910,6 +980,10 @@ export async function POST(request: Request) {
           } finally {
             closeTaskInfoText();
             await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
+            chatDebug("trigger_snapshot_persisted", {
+              chatId: id,
+              runPersistedTextLength: triggerAssistantTextForPersistence.length,
+            });
           }
         } else {
           const userText = extractLatestUserText(requestBody);
@@ -1001,6 +1075,9 @@ export async function POST(request: Request) {
         }
       },
       onError: (error) => {
+        chatDebug("stream_on_error", {
+          message: error instanceof Error ? error.message : String(error),
+        });
         if (error instanceof Error) {
           if (error.message.startsWith("turnstile_upstream:")) {
             return "Turnstile 验证失败，请重新勾选后再发送。";

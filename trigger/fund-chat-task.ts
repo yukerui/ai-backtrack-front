@@ -30,6 +30,8 @@ const UPSTREAM_RETRIES = Number.parseInt(
   10
 );
 const ARTIFACT_PATH_REGEX = /(?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv)/g;
+const TRIGGER_TASK_DEBUG_VERBOSE =
+  (process.env.TRIGGER_TASK_DEBUG_VERBOSE || "false").toLowerCase() === "true";
 
 function normalizeBase(rawBase: string) {
   const trimmed = rawBase.replace(/\/+$/, "");
@@ -41,6 +43,17 @@ function normalizeBase(rawBase: string) {
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function taskDebug(event: string, payload?: Record<string, unknown>) {
+  if (!TRIGGER_TASK_DEBUG_VERBOSE) {
+    return;
+  }
+  if (payload) {
+    console.log(`[fund-chat-task][debug] ${event}`, payload);
+    return;
+  }
+  console.log(`[fund-chat-task][debug] ${event}`);
 }
 
 function mergeSignals(signals: Array<AbortSignal | null | undefined>) {
@@ -150,6 +163,7 @@ async function streamUpstreamResponse(response: Response) {
     }
     if (payload === "[DONE]") {
       sawDone = true;
+      taskDebug("sse_done_marker_received");
       return;
     }
 
@@ -175,6 +189,7 @@ async function streamUpstreamResponse(response: Response) {
         id: reasoningPartId,
         delta: reasoningDelta,
       });
+      taskDebug("reasoning_delta", { deltaLength: reasoningDelta.length });
     }
 
     const textDelta = extractTextDelta(delta);
@@ -192,6 +207,7 @@ async function streamUpstreamResponse(response: Response) {
         delta: textDelta,
       });
       text += textDelta;
+      taskDebug("text_delta", { deltaLength: textDelta.length, accumulatedTextLength: text.length });
     }
   };
 
@@ -245,6 +261,14 @@ export const fundChatTask = schemaTask({
     { userId, chatId, userText, model, isNewChat, turnstileToken, policyPrechecked },
     { signal }
   ) => {
+    taskDebug("task_started", {
+      userId,
+      chatId,
+      model: model || "gpt-5-codex",
+      isNewChat: Boolean(isNewChat),
+      hasTurnstileToken: Boolean(turnstileToken?.trim()),
+      policyPrechecked: Boolean(policyPrechecked),
+    });
     const base = process.env.CLAUDE_CODE_API_BASE
       ? normalizeBase(process.env.CLAUDE_CODE_API_BASE)
       : "";
@@ -290,15 +314,22 @@ export const fundChatTask = schemaTask({
     let lastNetworkError: unknown;
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
+        taskDebug("upstream_request_attempt", { attempt: attempt + 1, totalAttempts: retries + 1 });
         response = await fetch(`${base}/v1/chat/completions`, {
           method: "POST",
           headers,
           body: requestBody,
           signal: requestSignal,
         });
+        taskDebug("upstream_response_received", { status: response.status, ok: response.ok });
         break;
       } catch (error) {
         lastNetworkError = error;
+        taskDebug("upstream_request_error", {
+          attempt: attempt + 1,
+          message: error instanceof Error ? error.message : String(error),
+          aborted: Boolean(requestSignal?.aborted),
+        });
         if (attempt >= retries || requestSignal?.aborted) {
           break;
         }
@@ -317,6 +348,10 @@ export const fundChatTask = schemaTask({
 
     const text = await streamUpstreamResponse(response);
     const artifacts = extractArtifactsFromText(text);
+    taskDebug("task_completed", {
+      textLength: text.length,
+      artifactsCount: artifacts.length,
+    });
 
     return {
       userId,
