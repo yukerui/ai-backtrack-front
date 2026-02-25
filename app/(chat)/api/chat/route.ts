@@ -57,7 +57,6 @@ function getStreamContext() {
   }
 }
 
-export { getStreamContext };
 
 function isQuotaDisabled() {
   return (process.env.DISABLE_CHAT_DAILY_QUOTA || "false").toLowerCase() === "true";
