@@ -45,6 +45,10 @@ type TaskStatusResponse = {
   text?: string;
 };
 
+type SetChatMessages = (
+  messages: ChatMessage[] | ((messages: ChatMessage[]) => ChatMessage[])
+) => void;
+
 function extractMessageText(message: ChatMessage) {
   const parts = Array.isArray(message.parts) ? message.parts : [];
   return parts
@@ -80,6 +84,33 @@ function extractTaskRunIdFromMessage(message: ChatMessage) {
   }
 
   return candidateIds.at(-1) || "";
+}
+
+function findLatestTaskMessageInLatestTurn(messages: ChatMessage[]) {
+  let lastUserMessageIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === "user") {
+      lastUserMessageIndex = i;
+      break;
+    }
+  }
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (i <= lastUserMessageIndex) {
+      break;
+    }
+    const message = messages[i];
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const runId = extractTaskRunIdFromMessage(message);
+    if (!runId) {
+      continue;
+    }
+    return { runId, messageId: message.id };
+  }
+
+  return null;
 }
 
 export function Chat({
@@ -127,6 +158,9 @@ export function Chat({
   const pollingTimersRef = useRef<Map<string, number>>(new Map());
   const pollingMessageIdsRef = useRef<Map<string, string>>(new Map());
   const pollingCursorRef = useRef<Map<string, number>>(new Map());
+  const pollingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const setMessagesRef = useRef<SetChatMessages | null>(null);
+  const hasRecoveredWatchdogRef = useRef(false);
   const unmountedRef = useRef(false);
   const turnstileTokenRef = useRef("");
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
@@ -141,6 +175,10 @@ export function Chat({
       pollingRunIdsRef.current.clear();
       pollingMessageIdsRef.current.clear();
       pollingCursorRef.current.clear();
+      for (const controller of pollingAbortControllersRef.current.values()) {
+        controller.abort();
+      }
+      pollingAbortControllersRef.current.clear();
     };
   }, []);
 
@@ -157,6 +195,210 @@ export function Chat({
       }
     }
   }, [turnstileToken]);
+
+  const stopPollingRun = (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    pollingRunIdsRef.current.delete(runId);
+    const timerId = pollingTimersRef.current.get(runId);
+    if (typeof timerId === "number") {
+      window.clearTimeout(timerId);
+    }
+    pollingTimersRef.current.delete(runId);
+    pollingMessageIdsRef.current.delete(runId);
+    pollingCursorRef.current.delete(runId);
+    const controller = pollingAbortControllersRef.current.get(runId);
+    if (controller) {
+      controller.abort();
+    }
+    pollingAbortControllersRef.current.delete(runId);
+  };
+
+  const stopAllPollingRuns = (activeRunId = "") => {
+    const knownRunIds = new Set<string>([
+      ...pollingRunIdsRef.current,
+      ...pollingTimersRef.current.keys(),
+      ...pollingMessageIdsRef.current.keys(),
+      ...pollingCursorRef.current.keys(),
+      ...pollingAbortControllersRef.current.keys(),
+    ]);
+    for (const runId of knownRunIds) {
+      if (activeRunId && runId === activeRunId) {
+        continue;
+      }
+      stopPollingRun(runId);
+    }
+  };
+
+  const startPollingRun = (runId: string, messageId: string) => {
+    if (!runId || !messageId) {
+      return;
+    }
+
+    pollingMessageIdsRef.current.set(runId, messageId);
+    if (!pollingCursorRef.current.has(runId)) {
+      pollingCursorRef.current.set(runId, 0);
+    }
+
+    if (pollingRunIdsRef.current.has(runId)) {
+      return;
+    }
+    pollingRunIdsRef.current.add(runId);
+
+    const poll = async () => {
+      if (unmountedRef.current) {
+        stopPollingRun(runId);
+        return;
+      }
+
+      const controller = new AbortController();
+      pollingAbortControllersRef.current.set(runId, controller);
+      try {
+        const cursor = pollingCursorRef.current.get(runId) || 0;
+        const response = await fetch(`/api/tasks/${runId}?cursor=${cursor}`, {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Task status fetch failed (${response.status})`);
+        }
+
+        const payload = (await response.json()) as TaskStatusResponse;
+        if (
+          typeof payload.nextCursor === "number" &&
+          Number.isFinite(payload.nextCursor) &&
+          payload.nextCursor >= 0
+        ) {
+          pollingCursorRef.current.set(runId, payload.nextCursor);
+        }
+
+        const activeMessageId = pollingMessageIdsRef.current.get(runId) || messageId;
+        const updateMessages = setMessagesRef.current;
+        if (!updateMessages) {
+          stopPollingRun(runId);
+          return;
+        }
+
+        const reasoningDelta =
+          typeof payload.reasoningText === "string" ? payload.reasoningText : "";
+        const textDelta = typeof payload.text === "string" ? payload.text : "";
+
+        if (!payload.isCompleted && !payload.isFailed && (reasoningDelta || textDelta)) {
+          updateMessages((current) =>
+            current.map((msg) => {
+              if (msg.id !== activeMessageId) {
+                return msg;
+              }
+              const existingReasoning = extractReasoningText(msg);
+              const existingText = extractMessageText(msg);
+              const nextReasoning = reasoningDelta
+                ? `${existingReasoning}${reasoningDelta}`
+                : existingReasoning;
+              const nextText = textDelta ? `${existingText}${textDelta}` : existingText;
+              const streamingParts = [
+                ...(nextReasoning
+                  ? [
+                      {
+                        type: "reasoning" as const,
+                        text: nextReasoning,
+                        state: "streaming" as const,
+                      },
+                    ]
+                  : []),
+                ...(nextText
+                  ? [
+                      {
+                        type: "text" as const,
+                        text: nextText,
+                      },
+                    ]
+                  : []),
+              ] as ChatMessage["parts"];
+              return {
+                ...msg,
+                parts: streamingParts,
+              };
+            })
+          );
+        }
+
+        const completedTextValue = typeof payload.text === "string" ? payload.text : "";
+        if (payload.isCompleted) {
+          updateMessages((current) =>
+            current.map((msg) => {
+              if (msg.id !== activeMessageId) {
+                return msg;
+              }
+              const existingReasoning = extractReasoningText(msg);
+              const finalReasoning = reasoningDelta
+                ? `${existingReasoning}${reasoningDelta}`
+                : existingReasoning;
+              const completedParts = [
+                ...(finalReasoning
+                  ? [
+                      {
+                        type: "reasoning" as const,
+                        text: finalReasoning,
+                        state: "done" as const,
+                      },
+                    ]
+                  : []),
+                {
+                  type: "text" as const,
+                  text: completedTextValue,
+                },
+              ] as ChatMessage["parts"];
+              return {
+                ...msg,
+                parts: completedParts,
+              };
+            })
+          );
+          stopPollingRun(runId);
+          mutate(unstable_serialize(getChatHistoryPaginationKey));
+          return;
+        }
+
+        if (payload.isFailed) {
+          updateMessages((current) =>
+            current.map((msg) => {
+              if (msg.id !== activeMessageId) {
+                return msg;
+              }
+              return {
+                ...msg,
+                parts: [{ type: "text", text: `任务执行失败：${payload.status}` }],
+              };
+            })
+          );
+          stopPollingRun(runId);
+          return;
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        console.error(`[chat-ui] Task poll failed for ${runId}:`, error);
+      } finally {
+        const activeController = pollingAbortControllersRef.current.get(runId);
+        if (activeController === controller) {
+          pollingAbortControllersRef.current.delete(runId);
+        }
+      }
+
+      if (!pollingRunIdsRef.current.has(runId)) {
+        return;
+      }
+
+      const nextTimer = window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+      pollingTimersRef.current.set(runId, nextTimer);
+    };
+
+    const firstTimer = window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+    pollingTimersRef.current.set(runId, firstTimer);
+  };
 
   const {
     messages,
@@ -231,8 +473,21 @@ export function Chat({
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
     },
-    onFinish: () => {
+    onFinish: ({ message, isAbort, isError }) => {
       mutate(unstable_serialize(getChatHistoryPaginationKey));
+
+      if (isAbort || isError || !message || message.role !== "assistant") {
+        return;
+      }
+
+      const runId = extractTaskRunIdFromMessage(message as ChatMessage);
+      if (!runId) {
+        return;
+      }
+
+      // Create one watchdog per completed /api/chat response message.
+      stopAllPollingRuns(runId);
+      startPollingRun(runId, message.id);
     },
     onError: (error) => {
       if (error instanceof ChatSDKError) {
@@ -249,6 +504,8 @@ export function Chat({
       }
     },
   });
+
+  setMessagesRef.current = setMessages;
 
   const searchParams = useSearchParams();
   const query = searchParams.get("query");
@@ -288,191 +545,30 @@ export function Chat({
   }, [query, sendMessage, hasAppendedQuery, id, turnstileSiteKey, turnstileToken]);
 
   useEffect(() => {
-    const startPollingRun = (runId: string, messageId: string) => {
-      if (!runId) {
-        return;
-      }
+    hasRecoveredWatchdogRef.current = false;
+    stopAllPollingRuns();
+  }, [id]);
 
-      // Keep pointing this runId to the latest placeholder message.
-      pollingMessageIdsRef.current.set(runId, messageId);
-      if (!pollingCursorRef.current.has(runId)) {
-        pollingCursorRef.current.set(runId, 0);
-      }
-
-      if (pollingRunIdsRef.current.has(runId)) {
-        return;
-      }
-      pollingRunIdsRef.current.add(runId);
-
-      const poll = async () => {
-        if (unmountedRef.current) {
-          pollingRunIdsRef.current.delete(runId);
-          const timerId = pollingTimersRef.current.get(runId);
-          if (typeof timerId === "number") {
-            window.clearTimeout(timerId);
-          }
-          pollingTimersRef.current.delete(runId);
-          pollingMessageIdsRef.current.delete(runId);
-          pollingCursorRef.current.delete(runId);
-          return;
-        }
-
-        try {
-          const cursor = pollingCursorRef.current.get(runId) || 0;
-          const response = await fetch(`/api/tasks/${runId}?cursor=${cursor}`, {
-            method: "GET",
-            cache: "no-store",
-          });
-          if (!response.ok) {
-            throw new Error(`Task status fetch failed (${response.status})`);
-          }
-
-          const payload = (await response.json()) as TaskStatusResponse;
-          if (
-            typeof payload.nextCursor === "number" &&
-            Number.isFinite(payload.nextCursor) &&
-            payload.nextCursor >= 0
-          ) {
-            pollingCursorRef.current.set(runId, payload.nextCursor);
-          }
-          const activeMessageId =
-            pollingMessageIdsRef.current.get(runId) || messageId;
-          const reasoningDelta =
-            typeof payload.reasoningText === "string" ? payload.reasoningText : "";
-          const textDelta = typeof payload.text === "string" ? payload.text : "";
-
-          if (!payload.isCompleted && !payload.isFailed && (reasoningDelta || textDelta)) {
-            setMessages((current) =>
-              current.map((msg) => {
-                if (msg.id !== activeMessageId) {
-                  return msg;
-                }
-                const existingReasoning = extractReasoningText(msg);
-                const existingText = extractMessageText(msg);
-                const nextReasoning = reasoningDelta
-                  ? `${existingReasoning}${reasoningDelta}`
-                  : existingReasoning;
-                const nextText = textDelta ? `${existingText}${textDelta}` : existingText;
-                const streamingParts = [
-                  ...(nextReasoning
-                    ? [
-                        {
-                          type: "reasoning" as const,
-                          text: nextReasoning,
-                          state: "streaming" as const,
-                        },
-                      ]
-                    : []),
-                  ...(nextText
-                    ? [
-                        {
-                          type: "text" as const,
-                          text: nextText,
-                        },
-                      ]
-                    : []),
-                ] as ChatMessage["parts"];
-                return {
-                  ...msg,
-                  parts: streamingParts,
-                };
-              })
-            );
-          }
-
-          const completedTextValue = typeof payload.text === "string" ? payload.text : "";
-          if (payload.isCompleted) {
-            setMessages((current) =>
-              current.map((msg) => {
-                if (msg.id !== activeMessageId) {
-                  return msg;
-                }
-                const existingReasoning = extractReasoningText(msg);
-                const finalReasoning = reasoningDelta
-                  ? `${existingReasoning}${reasoningDelta}`
-                  : existingReasoning;
-                const completedParts = [
-                  ...(finalReasoning
-                    ? [
-                        {
-                          type: "reasoning" as const,
-                          text: finalReasoning,
-                          state: "done" as const,
-                        },
-                      ]
-                    : []),
-                  {
-                    type: "text" as const,
-                    text: completedTextValue,
-                  },
-                ] as ChatMessage["parts"];
-                return {
-                  ...msg,
-                  parts: completedParts,
-                };
-              })
-            );
-            pollingRunIdsRef.current.delete(runId);
-            const timerId = pollingTimersRef.current.get(runId);
-            if (typeof timerId === "number") {
-              window.clearTimeout(timerId);
-            }
-            pollingTimersRef.current.delete(runId);
-            pollingMessageIdsRef.current.delete(runId);
-            pollingCursorRef.current.delete(runId);
-            mutate(unstable_serialize(getChatHistoryPaginationKey));
-            return;
-          }
-
-          if (payload.isFailed) {
-            setMessages((current) =>
-              current.map((msg) => {
-                if (msg.id !== activeMessageId) {
-                  return msg;
-                }
-                return {
-                  ...msg,
-                  parts: [{ type: "text", text: `任务执行失败：${payload.status}` }],
-                };
-              })
-            );
-            pollingRunIdsRef.current.delete(runId);
-            const timerId = pollingTimersRef.current.get(runId);
-            if (typeof timerId === "number") {
-              window.clearTimeout(timerId);
-            }
-            pollingTimersRef.current.delete(runId);
-            pollingMessageIdsRef.current.delete(runId);
-            pollingCursorRef.current.delete(runId);
-            return;
-          }
-        } catch (error) {
-          console.error(`[chat-ui] Task poll failed for ${runId}:`, error);
-        }
-
-        const nextTimer = window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
-        pollingTimersRef.current.set(runId, nextTimer);
-      };
-
-      const firstTimer = window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
-      pollingTimersRef.current.set(runId, firstTimer);
-    };
-
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages[i];
-      if (message.role !== "assistant") {
-        continue;
-      }
-      const runId = extractTaskRunIdFromMessage(message);
-      if (!runId) {
-        continue;
-      }
-      // Only poll the latest task marker to avoid stale runId interference.
-      startPollingRun(runId, message.id);
-      break;
+  useEffect(() => {
+    // A new chat submit started; stop previous watchdogs immediately.
+    if (status === "submitted") {
+      stopAllPollingRuns();
     }
+  }, [status]);
 
-  }, [messages, setMessages, mutate]);
+  useEffect(() => {
+    if (hasRecoveredWatchdogRef.current) {
+      return;
+    }
+    hasRecoveredWatchdogRef.current = true;
+
+    const pendingTask = findLatestTaskMessageInLatestTurn(initialMessages);
+    if (!pendingTask) {
+      return;
+    }
+    stopAllPollingRuns(pendingTask.runId);
+    startPollingRun(pendingTask.runId, pendingTask.messageId);
+  }, [id, initialMessages]);
 
   const { data: votes } = useSWR<Vote[]>(
     messages.length >= 2 ? `/api/vote?chatId=${id}` : null,
