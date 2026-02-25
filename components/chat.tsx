@@ -40,6 +40,7 @@ type TaskStatusResponse = {
   status: string;
   isCompleted: boolean;
   isFailed?: boolean;
+  nextCursor?: number;
   reasoningText?: string;
   text?: string;
 };
@@ -123,8 +124,25 @@ export function Chat({
   const [turnstileResetNonce, setTurnstileResetNonce] = useState(0);
   const hadInFlightRequestRef = useRef(false);
   const pollingRunIdsRef = useRef<Set<string>>(new Set());
+  const pollingTimersRef = useRef<Map<string, number>>(new Map());
+  const pollingMessageIdsRef = useRef<Map<string, string>>(new Map());
+  const pollingCursorRef = useRef<Map<string, number>>(new Map());
+  const unmountedRef = useRef(false);
   const turnstileTokenRef = useRef("");
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
+
+  useEffect(() => {
+    return () => {
+      unmountedRef.current = true;
+      for (const timerId of pollingTimersRef.current.values()) {
+        window.clearTimeout(timerId);
+      }
+      pollingTimersRef.current.clear();
+      pollingRunIdsRef.current.clear();
+      pollingMessageIdsRef.current.clear();
+      pollingCursorRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     turnstileTokenRef.current = turnstileToken;
@@ -270,22 +288,38 @@ export function Chat({
   }, [query, sendMessage, hasAppendedQuery, id, turnstileSiteKey, turnstileToken]);
 
   useEffect(() => {
-    let disposed = false;
-
     const startPollingRun = (runId: string, messageId: string) => {
-      if (!runId || pollingRunIdsRef.current.has(runId)) {
+      if (!runId) {
+        return;
+      }
+
+      // Keep pointing this runId to the latest placeholder message.
+      pollingMessageIdsRef.current.set(runId, messageId);
+      if (!pollingCursorRef.current.has(runId)) {
+        pollingCursorRef.current.set(runId, 0);
+      }
+
+      if (pollingRunIdsRef.current.has(runId)) {
         return;
       }
       pollingRunIdsRef.current.add(runId);
 
       const poll = async () => {
-        if (disposed) {
+        if (unmountedRef.current) {
           pollingRunIdsRef.current.delete(runId);
+          const timerId = pollingTimersRef.current.get(runId);
+          if (typeof timerId === "number") {
+            window.clearTimeout(timerId);
+          }
+          pollingTimersRef.current.delete(runId);
+          pollingMessageIdsRef.current.delete(runId);
+          pollingCursorRef.current.delete(runId);
           return;
         }
 
         try {
-          const response = await fetch(`/api/tasks/${runId}`, {
+          const cursor = pollingCursorRef.current.get(runId) || 0;
+          const response = await fetch(`/api/tasks/${runId}?cursor=${cursor}`, {
             method: "GET",
             cache: "no-store",
           });
@@ -294,6 +328,15 @@ export function Chat({
           }
 
           const payload = (await response.json()) as TaskStatusResponse;
+          if (
+            typeof payload.nextCursor === "number" &&
+            Number.isFinite(payload.nextCursor) &&
+            payload.nextCursor >= 0
+          ) {
+            pollingCursorRef.current.set(runId, payload.nextCursor);
+          }
+          const activeMessageId =
+            pollingMessageIdsRef.current.get(runId) || messageId;
           const reasoningDelta =
             typeof payload.reasoningText === "string" ? payload.reasoningText : "";
           const textDelta = typeof payload.text === "string" ? payload.text : "";
@@ -301,7 +344,7 @@ export function Chat({
           if (!payload.isCompleted && !payload.isFailed && (reasoningDelta || textDelta)) {
             setMessages((current) =>
               current.map((msg) => {
-                if (msg.id !== messageId) {
+                if (msg.id !== activeMessageId) {
                   return msg;
                 }
                 const existingReasoning = extractReasoningText(msg);
@@ -341,7 +384,7 @@ export function Chat({
           if (payload.isCompleted) {
             setMessages((current) =>
               current.map((msg) => {
-                if (msg.id !== messageId) {
+                if (msg.id !== activeMessageId) {
                   return msg;
                 }
                 const existingReasoning = extractReasoningText(msg);
@@ -370,6 +413,13 @@ export function Chat({
               })
             );
             pollingRunIdsRef.current.delete(runId);
+            const timerId = pollingTimersRef.current.get(runId);
+            if (typeof timerId === "number") {
+              window.clearTimeout(timerId);
+            }
+            pollingTimersRef.current.delete(runId);
+            pollingMessageIdsRef.current.delete(runId);
+            pollingCursorRef.current.delete(runId);
             mutate(unstable_serialize(getChatHistoryPaginationKey));
             return;
           }
@@ -377,7 +427,7 @@ export function Chat({
           if (payload.isFailed) {
             setMessages((current) =>
               current.map((msg) => {
-                if (msg.id !== messageId) {
+                if (msg.id !== activeMessageId) {
                   return msg;
                 }
                 return {
@@ -387,16 +437,25 @@ export function Chat({
               })
             );
             pollingRunIdsRef.current.delete(runId);
+            const timerId = pollingTimersRef.current.get(runId);
+            if (typeof timerId === "number") {
+              window.clearTimeout(timerId);
+            }
+            pollingTimersRef.current.delete(runId);
+            pollingMessageIdsRef.current.delete(runId);
+            pollingCursorRef.current.delete(runId);
             return;
           }
         } catch (error) {
           console.error(`[chat-ui] Task poll failed for ${runId}:`, error);
         }
 
-        window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+        const nextTimer = window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+        pollingTimersRef.current.set(runId, nextTimer);
       };
 
-      window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+      const firstTimer = window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+      pollingTimersRef.current.set(runId, firstTimer);
     };
 
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -413,9 +472,6 @@ export function Chat({
       break;
     }
 
-    return () => {
-      disposed = true;
-    };
   }, [messages, setMessages, mutate]);
 
   const { data: votes } = useSWR<Vote[]>(

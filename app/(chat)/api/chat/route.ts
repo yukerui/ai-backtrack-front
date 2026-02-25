@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { geolocation } from "@vercel/functions";
 import {
   convertToModelMessages,
@@ -104,6 +105,48 @@ function extractLatestUserText(body: PostRequestBody) {
   }
 
   return "";
+}
+
+function extractLatestUserMessageId(body: PostRequestBody) {
+  if (body.message?.role === "user" && typeof body.message.id === "string") {
+    return body.message.id;
+  }
+
+  if (Array.isArray(body.messages)) {
+    for (let i = body.messages.length - 1; i >= 0; i -= 1) {
+      const current = body.messages[i] as {
+        id?: unknown;
+        role?: string;
+      };
+      if (current?.role !== "user") {
+        continue;
+      }
+      if (typeof current.id === "string" && current.id.trim()) {
+        return current.id;
+      }
+    }
+  }
+
+  return "";
+}
+
+function buildTriggerIdempotencyKey({
+  chatId,
+  userId,
+  requestBody,
+  userText,
+}: {
+  chatId: string;
+  userId: string;
+  requestBody: PostRequestBody;
+  userText: string;
+}) {
+  const messageId = extractLatestUserMessageId(requestBody);
+  const rawKey = messageId
+    ? `fund-chat:${chatId}:${userId}:${messageId}`
+    : `fund-chat:${chatId}:${userId}:${requestBody.id}:${userText}`;
+
+  return createHash("sha256").update(rawKey).digest("hex");
 }
 
 function chatDebug(event: string, payload?: Record<string, unknown>) {
@@ -645,19 +688,33 @@ export async function POST(request: Request) {
             return;
           }
 
-          const handle = await tasks.trigger<typeof fundChatTask>("fund-chat-task", {
-            userId: session.user.id,
+          const triggerIdempotencyKey = buildTriggerIdempotencyKey({
             chatId: id,
+            userId: session.user.id,
+            requestBody,
             userText,
-            model: FIXED_CHAT_MODEL,
-            isNewChat: !chat,
-            turnstileToken: turnstileToken || undefined,
-            policyPrechecked: true,
           });
+          const handle = await tasks.trigger<typeof fundChatTask>(
+            "fund-chat-task",
+            {
+              userId: session.user.id,
+              chatId: id,
+              userText,
+              model: FIXED_CHAT_MODEL,
+              isNewChat: !chat,
+              turnstileToken: turnstileToken || undefined,
+              policyPrechecked: true,
+            },
+            {
+              idempotencyKey: triggerIdempotencyKey,
+              idempotencyKeyTTL: "10m",
+            }
+          );
           const runId = handle.id;
           chatDebug("trigger_task_submitted", {
             chatId: id,
             runId,
+            idempotencyKeyPrefix: triggerIdempotencyKey.slice(0, 12),
           });
           const taskInfo = [
             "任务已提交，后台处理中。",

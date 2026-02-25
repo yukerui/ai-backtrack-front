@@ -84,14 +84,29 @@ function appendArtifactsToText(text: string, artifacts: string[]) {
   return `${prefix}资源\n${lines}`;
 }
 
-async function readRealtimeSnapshot(runId: string) {
+function normalizeCursor(value: string | null) {
+  if (!value) {
+    return 0;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+async function readRealtimeSnapshot(runId: string, cursor: number) {
   const chunks: FundChatRealtimeChunk[] = [];
+  let nextCursor = cursor;
   try {
+    const startIndex = cursor > 0 ? cursor + 1 : undefined;
     const streamChunks = await fundChatRealtimeStream.read(runId, {
       timeoutInSeconds: 1,
+      ...(typeof startIndex === "number" ? { startIndex } : {}),
     });
 
     for await (const rawChunk of streamChunks) {
+      nextCursor += 1;
       const parsed = decodeFundChatRealtimeChunk(rawChunk);
       if (parsed) {
         chunks.push(parsed);
@@ -114,11 +129,11 @@ async function readRealtimeSnapshot(runId: string) {
     }
   }
 
-  return { reasoningText, text };
+  return { reasoningText, text, nextCursor };
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ runId: string }> }
 ) {
   const session = await auth();
@@ -127,18 +142,21 @@ export async function GET(
   }
 
   const { runId } = await params;
+  const { searchParams } = new URL(request.url);
+  const cursor = normalizeCursor(searchParams.get("cursor"));
   const run = await runs.retrieve<typeof fundChatTask>(runId);
   const payloadUserId = (run.payload as { userId?: string } | null)?.userId;
   if (payloadUserId && payloadUserId !== session.user.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const realtimeSnapshot = await readRealtimeSnapshot(runId);
+  const realtimeSnapshot = await readRealtimeSnapshot(runId, cursor);
 
   if (run.status !== "COMPLETED") {
     return NextResponse.json({
       status: run.status,
       isCompleted: false,
       isFailed: FAILURE_STATUSES.has(run.status),
+      nextCursor: realtimeSnapshot.nextCursor,
       reasoningText: realtimeSnapshot.reasoningText,
       text: realtimeSnapshot.text,
       error: run.error || null,
@@ -209,6 +227,7 @@ export async function GET(
   return NextResponse.json({
     status: run.status,
     isCompleted: true,
+    nextCursor: realtimeSnapshot.nextCursor,
     reasoningText: realtimeSnapshot.reasoningText,
     text: enriched,
     artifacts: normalized.artifacts,
