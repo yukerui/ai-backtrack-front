@@ -309,7 +309,7 @@ export function Chat({
         window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
       };
 
-      window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
+      void poll();
     };
 
     for (const message of messages) {

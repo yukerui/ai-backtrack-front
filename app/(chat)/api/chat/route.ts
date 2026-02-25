@@ -45,7 +45,7 @@ export const maxDuration = 300;
 
 const DEFAULT_BACKEND = "claude_proxy";
 const FIXED_CHAT_MODEL =
-  process.env.CODEX_MODEL || process.env.CLAUDE_CODE_MODEL || "gpt-5-codex";
+  process.env.CODEX_MODEL || process.env.CLAUDE_CODE_MODEL || "gpt-5.3-codex";
 const USE_TRIGGER_DEV = (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
 const CHAT_API_DEBUG_VERBOSE = (process.env.CHAT_API_DEBUG_VERBOSE || "false").toLowerCase() === "true";
 

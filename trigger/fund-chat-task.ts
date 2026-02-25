@@ -264,7 +264,7 @@ export const fundChatTask = schemaTask({
     taskDebug("task_started", {
       userId,
       chatId,
-      model: model || "gpt-5-codex",
+      model: model || "gpt-5.3-codex",
       isNewChat: Boolean(isNewChat),
       hasTurnstileToken: Boolean(turnstileToken?.trim()),
       policyPrechecked: Boolean(policyPrechecked),
@@ -299,7 +299,7 @@ export const fundChatTask = schemaTask({
     }
 
     const requestBody = JSON.stringify({
-      model: model || "gpt-5-codex",
+      model: model || "gpt-5.3-codex",
       stream: true,
       messages: [{ role: "user", content: userText }],
     });
