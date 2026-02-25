@@ -32,7 +32,8 @@ import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
 
-const TASK_MARKER_REGEX = /\[\[task:([A-Za-z0-9_-]+)\]\]/;
+const TASK_MARKER_REGEX = /\[\[task:([A-Za-z0-9_-]+)\]\]/g;
+const TASK_PROGRESS_URL_REGEX = /\/api\/tasks\/([A-Za-z0-9_-]+)/g;
 const TASK_POLL_INTERVAL_MS = 2000;
 
 type TaskStatusResponse = {
@@ -64,8 +65,20 @@ function extractReasoningText(message: ChatMessage) {
 
 function extractTaskRunIdFromMessage(message: ChatMessage) {
   const text = extractMessageText(message);
-  const match = text.match(TASK_MARKER_REGEX);
-  return match?.[1] || "";
+  const candidateIds: string[] = [];
+
+  for (const match of text.matchAll(TASK_MARKER_REGEX)) {
+    if (match[1]) {
+      candidateIds.push(match[1]);
+    }
+  }
+  for (const match of text.matchAll(TASK_PROGRESS_URL_REGEX)) {
+    if (match[1]) {
+      candidateIds.push(match[1]);
+    }
+  }
+
+  return candidateIds.at(-1) || "";
 }
 
 export function Chat({
@@ -386,7 +399,8 @@ export function Chat({
       window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
     };
 
-    for (const message of messages) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
       if (message.role !== "assistant") {
         continue;
       }
@@ -394,7 +408,9 @@ export function Chat({
       if (!runId) {
         continue;
       }
+      // Only poll the latest task marker to avoid stale runId interference.
       startPollingRun(runId, message.id);
+      break;
     }
 
     return () => {
