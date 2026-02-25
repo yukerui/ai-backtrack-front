@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { auth } from "@/app/(auth)/auth";
 import { runs } from "@trigger.dev/sdk";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
+import {
+  decodeFundChatRealtimeChunk,
+  fundChatRealtimeStream,
+  type FundChatRealtimeChunk,
+} from "@/trigger/streams";
 import { enrichAssistantText } from "@/lib/artifacts";
 import { getMessagesByChatId, updateMessage } from "@/lib/db/queries";
 
@@ -79,6 +84,39 @@ function appendArtifactsToText(text: string, artifacts: string[]) {
   return `${prefix}资源\n${lines}`;
 }
 
+async function readRealtimeSnapshot(runId: string) {
+  const chunks: FundChatRealtimeChunk[] = [];
+  try {
+    const streamChunks = await fundChatRealtimeStream.read(runId, {
+      timeoutInSeconds: 1,
+    });
+
+    for await (const rawChunk of streamChunks) {
+      const parsed = decodeFundChatRealtimeChunk(rawChunk);
+      if (parsed) {
+        chunks.push(parsed);
+      }
+    }
+  } catch {
+    // Ignore transient stream read errors and keep polling snapshots resilient.
+  }
+
+  let reasoningText = "";
+  let text = "";
+
+  for (const chunk of chunks) {
+    if (chunk.type === "reasoning-delta") {
+      reasoningText += chunk.delta;
+      continue;
+    }
+    if (chunk.type === "text-delta") {
+      text += chunk.delta;
+    }
+  }
+
+  return { reasoningText, text };
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ runId: string }> }
@@ -94,12 +132,15 @@ export async function GET(
   if (payloadUserId && payloadUserId !== session.user.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  const realtimeSnapshot = await readRealtimeSnapshot(runId);
 
   if (run.status !== "COMPLETED") {
     return NextResponse.json({
       status: run.status,
       isCompleted: false,
       isFailed: FAILURE_STATUSES.has(run.status),
+      reasoningText: realtimeSnapshot.reasoningText,
+      text: realtimeSnapshot.text,
       error: run.error || null,
     });
   }
@@ -168,6 +209,7 @@ export async function GET(
   return NextResponse.json({
     status: run.status,
     isCompleted: true,
+    reasoningText: realtimeSnapshot.reasoningText,
     text: enriched,
     artifacts: normalized.artifacts,
   });

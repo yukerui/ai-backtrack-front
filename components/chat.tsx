@@ -39,6 +39,7 @@ type TaskStatusResponse = {
   status: string;
   isCompleted: boolean;
   isFailed?: boolean;
+  reasoningText?: string;
   text?: string;
 };
 
@@ -46,6 +47,17 @@ function extractMessageText(message: ChatMessage) {
   const parts = Array.isArray(message.parts) ? message.parts : [];
   return parts
     .filter((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text")
+    .map((part) => String((part as { text?: unknown }).text || ""))
+    .join("\n");
+}
+
+function extractReasoningText(message: ChatMessage) {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  return parts
+    .filter(
+      (part) =>
+        typeof part === "object" && part !== null && (part as { type?: unknown }).type === "reasoning"
+    )
     .map((part) => String((part as { text?: unknown }).text || ""))
     .join("\n");
 }
@@ -269,6 +281,49 @@ export function Chat({
           }
 
           const payload = (await response.json()) as TaskStatusResponse;
+          const reasoningDelta =
+            typeof payload.reasoningText === "string" ? payload.reasoningText : "";
+          const textDelta = typeof payload.text === "string" ? payload.text : "";
+
+          if (!payload.isCompleted && !payload.isFailed && (reasoningDelta || textDelta)) {
+            setMessages((current) =>
+              current.map((msg) => {
+                if (msg.id !== messageId) {
+                  return msg;
+                }
+                const existingReasoning = extractReasoningText(msg);
+                const existingText = extractMessageText(msg);
+                const nextReasoning = reasoningDelta
+                  ? `${existingReasoning}${reasoningDelta}`
+                  : existingReasoning;
+                const nextText = textDelta ? `${existingText}${textDelta}` : existingText;
+                const streamingParts = [
+                  ...(nextReasoning
+                    ? [
+                        {
+                          type: "reasoning" as const,
+                          text: nextReasoning,
+                          state: "streaming" as const,
+                        },
+                      ]
+                    : []),
+                  ...(nextText
+                    ? [
+                        {
+                          type: "text" as const,
+                          text: nextText,
+                        },
+                      ]
+                    : []),
+                ] as ChatMessage["parts"];
+                return {
+                  ...msg,
+                  parts: streamingParts,
+                };
+              })
+            );
+          }
+
           const completedTextValue = typeof payload.text === "string" ? payload.text : "";
           if (payload.isCompleted) {
             setMessages((current) =>
@@ -276,9 +331,28 @@ export function Chat({
                 if (msg.id !== messageId) {
                   return msg;
                 }
+                const existingReasoning = extractReasoningText(msg);
+                const finalReasoning = reasoningDelta
+                  ? `${existingReasoning}${reasoningDelta}`
+                  : existingReasoning;
+                const completedParts = [
+                  ...(finalReasoning
+                    ? [
+                        {
+                          type: "reasoning" as const,
+                          text: finalReasoning,
+                          state: "done" as const,
+                        },
+                      ]
+                    : []),
+                  {
+                    type: "text" as const,
+                    text: completedTextValue,
+                  },
+                ] as ChatMessage["parts"];
                 return {
                   ...msg,
-                  parts: [{ type: "text", text: completedTextValue }],
+                  parts: completedParts,
                 };
               })
             );
@@ -309,7 +383,7 @@ export function Chat({
         window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
       };
 
-      void poll();
+      window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
     };
 
     for (const message of messages) {
