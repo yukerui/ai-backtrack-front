@@ -97,6 +97,16 @@ export function sanitizeText(text: string) {
   return text.replace('<has_function_call>', '');
 }
 
+const URL_TO_MARKDOWN_REGEX = /(?<!\]\()(?<!<)https?:\/\/[^\s<>()]+/g;
+
+export function linkifyUrlsAsMarkdown(text: string) {
+  if (!text) {
+    return text;
+  }
+
+  return text.replace(URL_TO_MARKDOWN_REGEX, (url) => `[${url}](${url})`);
+}
+
 export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   return messages.map((message) => ({
     id: message.id,
