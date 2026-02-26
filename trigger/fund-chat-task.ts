@@ -25,6 +25,8 @@ const UPSTREAM_TIMEOUT_MS = Number.parseInt(
   process.env.TRIGGER_UPSTREAM_TIMEOUT_MS || "1800000",
   10
 );
+const ENFORCE_UPSTREAM_TIMEOUT =
+  (process.env.TRIGGER_ENFORCE_UPSTREAM_TIMEOUT || "false").toLowerCase() === "true";
 const UPSTREAM_RETRIES = Number.parseInt(
   process.env.TRIGGER_UPSTREAM_RETRIES || "1",
   10
@@ -304,11 +306,18 @@ export const fundChatTask = schemaTask({
       messages: [{ role: "user", content: userText }],
     });
     const timeoutSignal =
-      Number.isFinite(UPSTREAM_TIMEOUT_MS) && UPSTREAM_TIMEOUT_MS > 0
+      ENFORCE_UPSTREAM_TIMEOUT &&
+      Number.isFinite(UPSTREAM_TIMEOUT_MS) &&
+      UPSTREAM_TIMEOUT_MS > 0
         ? AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
         : undefined;
     const requestSignal = mergeSignals([signal, timeoutSignal]);
     const retries = Number.isFinite(UPSTREAM_RETRIES) && UPSTREAM_RETRIES > 0 ? UPSTREAM_RETRIES : 0;
+    taskDebug("upstream_timeout_config", {
+      enforceUpstreamTimeout: ENFORCE_UPSTREAM_TIMEOUT,
+      upstreamTimeoutMs: UPSTREAM_TIMEOUT_MS,
+      triggerTaskMaxDurationSeconds: TASK_MAX_DURATION_SECONDS,
+    });
 
     let response: Response | null = null;
     let lastNetworkError: unknown;
