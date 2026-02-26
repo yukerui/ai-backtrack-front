@@ -97,14 +97,34 @@ export function sanitizeText(text: string) {
   return text.replace('<has_function_call>', '');
 }
 
-const URL_TO_MARKDOWN_REGEX = /(?<!\]\()(?<!<)https?:\/\/[^\s<>()]+/g;
+const MARKDOWN_LINK_OR_URL_REGEX = /\[[^\]]+]\([^)]+\)|https?:\/\/[^\s<>()`]+/g;
+
+function normalizeBrokenMarkdownLinks(text: string) {
+  // Fix common malformed pattern from model output:
+  // [label](https://example.com`)
+  return text.replace(/\]\(([^)\s`]+)`\)/g, "]($1)");
+}
+
+function stripTrailingUrlPunctuation(url: string) {
+  return url.replace(/[.,;!?]+$/g, "");
+}
 
 export function linkifyUrlsAsMarkdown(text: string) {
   if (!text) {
     return text;
   }
 
-  return text.replace(URL_TO_MARKDOWN_REGEX, (url) => `[${url}](${url})`);
+  const normalized = normalizeBrokenMarkdownLinks(text);
+
+  return normalized.replace(MARKDOWN_LINK_OR_URL_REGEX, (match) => {
+    // Keep existing markdown links unchanged.
+    if (match.startsWith("[")) {
+      return match;
+    }
+
+    const url = stripTrailingUrlPunctuation(match);
+    return `[${url}](${url})`;
+  });
 }
 
 export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
