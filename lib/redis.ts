@@ -1,44 +1,48 @@
 import "server-only";
-import { createClient, type RedisClientType } from "redis";
+import { Redis } from "@upstash/redis";
 
-let redisClient: RedisClientType | null = null;
-let connectPromise: Promise<RedisClientType> | null = null;
+const DEFAULT_UPSTASH_REDIS_REST_URL = "https://eminent-pipefish-38577.upstash.io";
+const DEFAULT_UPSTASH_REDIS_REST_TOKEN =
+  "AZaxAAIncDEyMjM3ZTNmZDYyY2U0YmViYjY2ZjQ5NzcwMjIzYzQwZXAxMzg1Nzc";
 
 function getRedisUrl() {
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) {
-    throw new Error("Missing REDIS_URL");
+  const url =
+    process.env.UPSTASH_REDIS_REST_URL ||
+    process.env.REDIS_URL ||
+    DEFAULT_UPSTASH_REDIS_REST_URL;
+  if (!url) {
+    throw new Error("Missing UPSTASH_REDIS_REST_URL");
   }
-  return redisUrl;
+  return url;
 }
 
-function getOrCreateClient() {
+function getRedisToken() {
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || DEFAULT_UPSTASH_REDIS_REST_TOKEN;
+  if (!token) {
+    throw new Error("Missing UPSTASH_REDIS_REST_TOKEN");
+  }
+  return token;
+}
+
+let redisClient: Redis | null = null;
+
+export function isRedisConfigured() {
+  const url =
+    process.env.UPSTASH_REDIS_REST_URL ||
+    process.env.REDIS_URL ||
+    DEFAULT_UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || DEFAULT_UPSTASH_REDIS_REST_TOKEN;
+  return Boolean(url && token);
+}
+
+export function getRedisClient() {
   if (redisClient) {
     return redisClient;
   }
 
-  redisClient = createClient({ url: getRedisUrl() });
-  redisClient.on("error", (error) => {
-    console.error("[redis] Client error:", error);
+  redisClient = new Redis({
+    url: getRedisUrl(),
+    token: getRedisToken(),
   });
-
   return redisClient;
-}
-
-export async function getRedisClient() {
-  const client = getOrCreateClient();
-  if (client.isOpen) {
-    return client;
-  }
-
-  if (!connectPromise) {
-    connectPromise = client
-      .connect()
-      .then(() => client)
-      .finally(() => {
-        connectPromise = null;
-      });
-  }
-
-  return connectPromise;
 }

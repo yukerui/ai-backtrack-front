@@ -199,18 +199,18 @@ export async function saveTaskRunOwner({
   sidHash: string;
   ttlSeconds?: number;
 }) {
-  const client = await getRedisClient();
+  const client = getRedisClient();
   const value: TaskRunOwnerRecord = {
     userId,
     sidHash,
     createdAt: Date.now(),
   };
-  await client.set(taskOwnerKey(runId), JSON.stringify(value), { EX: ttlSeconds });
+  await client.set(taskOwnerKey(runId), JSON.stringify(value), { ex: ttlSeconds });
 }
 
 export async function getTaskRunOwner(runId: string) {
-  const client = await getRedisClient();
-  const raw = await client.get(taskOwnerKey(runId));
+  const client = getRedisClient();
+  const raw = await client.get<string>(taskOwnerKey(runId));
   if (!raw) {
     return null;
   }
@@ -243,13 +243,13 @@ export async function initializeTaskCursorState({
   cursorSig: string;
   ttlSeconds?: number;
 }) {
-  const client = await getRedisClient();
+  const client = getRedisClient();
   await Promise.all([
     client.set(taskCursorValueKey(runId, sidHash), String(cursor), {
-      EX: ttlSeconds,
+      ex: ttlSeconds,
     }),
     client.set(taskCursorSigKey(runId, sidHash), cursorSig, {
-      EX: ttlSeconds,
+      ex: ttlSeconds,
     }),
   ]);
 }
@@ -261,10 +261,10 @@ export async function getTaskCursorState({
   runId: string;
   sidHash: string;
 }) {
-  const client = await getRedisClient();
+  const client = getRedisClient();
   const [cursorRaw, sig] = await Promise.all([
-    client.get(taskCursorValueKey(runId, sidHash)),
-    client.get(taskCursorSigKey(runId, sidHash)),
+    client.get<string>(taskCursorValueKey(runId, sidHash)),
+    client.get<string>(taskCursorSigKey(runId, sidHash)),
   ]);
   if (!cursorRaw || !sig) {
     return null;
@@ -293,20 +293,27 @@ export async function compareAndSwapTaskCursorState({
   nextSig: string;
   ttlSeconds?: number;
 }) {
-  const client = await getRedisClient();
-  const result = await client.sendCommand([
-    "EVAL",
+  const client = getRedisClient();
+  const result = await (
+    client as unknown as {
+      eval: (
+        script: string,
+        keys: string[],
+        args: string[]
+      ) => Promise<unknown>;
+    }
+  ).eval(
     // CAS both cursor and signature to prevent replay and enforce monotonic polling.
     'local c=redis.call("GET",KEYS[1]); local s=redis.call("GET",KEYS[2]); if (not c) or (not s) then return -1 end; if c~=ARGV[1] then return 0 end; if s~=ARGV[2] then return 0 end; redis.call("SET",KEYS[1],ARGV[3],"EX",ARGV[5]); redis.call("SET",KEYS[2],ARGV[4],"EX",ARGV[5]); return 1',
-    "2",
-    taskCursorValueKey(runId, sidHash),
-    taskCursorSigKey(runId, sidHash),
-    String(expectedCursor),
-    expectedSig,
-    String(nextCursor),
-    nextSig,
-    String(ttlSeconds),
-  ]);
+    [taskCursorValueKey(runId, sidHash), taskCursorSigKey(runId, sidHash)],
+    [
+      String(expectedCursor),
+      expectedSig,
+      String(nextCursor),
+      nextSig,
+      String(ttlSeconds),
+    ]
+  );
 
   return Number(result) === 1;
 }

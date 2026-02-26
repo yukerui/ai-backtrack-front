@@ -35,6 +35,7 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
+import { isRedisConfigured } from "@/lib/redis";
 import {
   getTaskOwnerTtlSeconds,
   hashTaskSessionId,
@@ -1045,7 +1046,7 @@ export async function POST(request: Request) {
     return createUIMessageStreamResponse({
       stream,
       async consumeSseStream({ stream: sseStream }) {
-        if (!process.env.REDIS_URL) {
+        if (!isRedisConfigured()) {
           return;
         }
         try {
