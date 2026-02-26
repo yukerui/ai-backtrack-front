@@ -107,9 +107,18 @@ function fromBase64Url(input: string) {
   return Buffer.from(base64 + pad, "base64");
 }
 
+function signToken(pathValue: string) {
+  if (!ARTIFACTS_SIGNING_SECRET) {
+    return "";
+  }
+  const payload = JSON.stringify({ p: pathValue, e: Date.now() + TOKEN_TTL_MS });
+  const sig = createHmac("sha256", ARTIFACTS_SIGNING_SECRET).update(payload).digest();
+  return `${toBase64Url(payload)}.${toBase64Url(sig)}`;
+}
+
 function verifyToken(
   token: string
-): { ok: true; path: string } | { ok: false; error: string } {
+): { ok: true; path: string } | { ok: false; error: string; path?: string; expired?: boolean } {
   if (!ARTIFACTS_SIGNING_SECRET) {
     return { ok: false, error: "Missing artifact signing secret" };
   }
@@ -138,7 +147,7 @@ function verifyToken(
     return { ok: false, error: "Invalid token" };
   }
   if (Date.now() > parsed.e) {
-    return { ok: false, error: "Token expired" };
+    return { ok: false, error: "Token expired", path: parsed.p, expired: true };
   }
   return { ok: true, path: parsed.p };
 }
@@ -171,12 +180,22 @@ export async function GET(request: Request) {
   }
 
   let resolvedPath = "";
+  let tokenForUpstream = token || "";
   if (token) {
     const verified = verifyToken(token);
     if (!verified.ok) {
-      return NextResponse.json({ error: verified.error }, { status: 403 });
+      if (verified.expired && verified.path) {
+        resolvedPath = verified.path;
+        const refreshed = signToken(resolvedPath);
+        if (refreshed) {
+          tokenForUpstream = refreshed;
+        }
+      } else {
+        return NextResponse.json({ error: verified.error }, { status: 403 });
+      }
+    } else {
+      resolvedPath = verified.path;
     }
-    resolvedPath = verified.path;
   } else if (process.env.ALLOW_UNSAFE_ARTIFACT_PATH === "true" && inputPath) {
     resolvedPath = inputPath;
   } else {
@@ -215,14 +234,17 @@ export async function GET(request: Request) {
   }
 
   const remoteBase = resolveRemoteBase(request.url);
-  if (remoteBase && token) {
+  if (remoteBase && tokenForUpstream) {
     try {
-      const upstream = await fetch(`${remoteBase}/artifacts?token=${encodeURIComponent(token)}`, {
+      const upstream = await fetch(
+        `${remoteBase}/artifacts?token=${encodeURIComponent(tokenForUpstream)}`,
+        {
         headers: {
           accept: "text/html, text/csv, application/json, text/plain",
         },
         cache: "no-store",
-      });
+        }
+      );
       if (upstream.ok) {
         const contentType = upstream.headers.get("content-type") || "application/octet-stream";
         const content = await upstream.arrayBuffer();
