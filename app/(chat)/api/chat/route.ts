@@ -37,10 +37,12 @@ import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import { isRedisConfigured } from "@/lib/redis";
 import {
+  getTaskRunMessageId,
   getTaskOwnerTtlSeconds,
   hashTaskSessionId,
   initializeTaskCursorState,
   readTaskSessionIdFromCookieHeader,
+  saveTaskRunMessageId,
   saveTaskRunOwner,
   signTaskCursor,
 } from "@/lib/task-security";
@@ -753,20 +755,27 @@ export async function POST(request: Request) {
             idempotencyKeyPrefix: triggerIdempotencyKey.slice(0, 12),
             taskSessionHashPrefix: taskSessionHash.slice(0, 12),
           });
-          const taskInfo = [
-            "任务已提交，后台处理中。",
-            `任务ID: ${runId}`,
-            `查询进度: /api/tasks/${runId}?cursor=${initialCursor}&cursor_sig=${encodeURIComponent(
-              initialCursorSig
-            )}`,
-            `[[task:${runId}]]`,
-            `[[task-auth:${runId}:${initialCursor}:${initialCursorSig}]]`,
-          ].join("\n");
+          const taskInfo = "任务已提交，后台处理中。稍后会自动更新";
           const taskInfoTextId = generateUUID();
           let taskInfoClosed = false;
           triggerAssistantTextForPersistence = taskInfo;
           await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
+          if (persistedTriggerAssistantMessageId) {
+            await saveTaskRunMessageId({
+              runId,
+              messageId: persistedTriggerAssistantMessageId,
+              ttlSeconds: taskOwnerTtlSeconds,
+            });
+          }
 
+          dataStream.write({
+            type: "data-task-auth",
+            data: {
+              runId,
+              cursor: initialCursor,
+              cursorSig: initialCursorSig,
+            },
+          });
           dataStream.write({ type: "text-start", id: taskInfoTextId });
           dataStream.write({ type: "text-delta", id: taskInfoTextId, delta: taskInfo });
 
@@ -867,35 +876,39 @@ export async function POST(request: Request) {
                 pollIntervalMs: 1500,
               });
 
-              const marker = `[[task:${runId}]]`;
-              const messages = await getMessagesByChatId({ id });
-              const pendingMessage = [...messages]
-                .reverse()
-                .find((item) => {
-                  if (item.role !== "assistant") {
-                    return false;
-                  }
-                  const parts = Array.isArray(item.parts) ? item.parts : [];
-                  const text = parts
-                    .filter(
-                      (part) =>
-                        typeof part === "object" &&
-                        part !== null &&
-                        (part as { type?: unknown }).type === "text"
-                    )
-                    .map((part) => String((part as { text?: unknown }).text || ""))
-                    .join("\n");
-                  return text.includes(marker);
-                });
+              let pendingMessageId = await getTaskRunMessageId(runId);
+              if (!pendingMessageId) {
+                const marker = `[[task:${runId}]]`;
+                const messages = await getMessagesByChatId({ id });
+                const pendingMessage = [...messages]
+                  .reverse()
+                  .find((item) => {
+                    if (item.role !== "assistant") {
+                      return false;
+                    }
+                    const parts = Array.isArray(item.parts) ? item.parts : [];
+                    const text = parts
+                      .filter(
+                        (part) =>
+                          typeof part === "object" &&
+                          part !== null &&
+                          (part as { type?: unknown }).type === "text"
+                      )
+                      .map((part) => String((part as { text?: unknown }).text || ""))
+                      .join("\n");
+                    return text.includes(marker);
+                  });
+                pendingMessageId = pendingMessage?.id || null;
+              }
 
-              if (!pendingMessage) {
+              if (!pendingMessageId) {
                 return;
               }
 
               if (run.status !== "COMPLETED") {
                 if (failureStatuses.has(run.status)) {
                   await updateMessage({
-                    id: pendingMessage.id,
+                    id: pendingMessageId,
                     parts: [{ type: "text", text: `任务执行失败：${run.status}`, state: "done" }],
                   });
                 }
@@ -922,7 +935,7 @@ export async function POST(request: Request) {
               const enriched = enrichAssistantText(withArtifacts);
 
               await updateMessage({
-                id: pendingMessage.id,
+                id: pendingMessageId,
                 parts: [{ type: "text", text: enriched, state: "done" }],
               });
             } catch (persistError) {

@@ -42,6 +42,11 @@ export type CustomUIDataTypes = {
   clear: null;
   finish: null;
   "chat-title": string;
+  "task-auth": {
+    runId: string;
+    cursor: number;
+    cursorSig: string;
+  };
 };
 
 export type ChatMessage = UIMessage<

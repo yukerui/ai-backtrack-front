@@ -52,6 +52,15 @@ type TaskPollingMeta = {
   cursorSig: string;
 };
 
+type DataTaskAuthPart = {
+  type: "data-task-auth";
+  data?: {
+    runId?: unknown;
+    cursor?: unknown;
+    cursorSig?: unknown;
+  };
+};
+
 type SetChatMessages = (
   messages: ChatMessage[] | ((messages: ChatMessage[]) => ChatMessage[])
 ) => void;
@@ -119,6 +128,50 @@ function findLatestTaskMessageInLatestTurn(messages: ChatMessage[]) {
   return null;
 }
 
+function findLatestAssistantMessageIdInLatestTurn(messages: ChatMessage[]) {
+  let lastUserMessageIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === "user") {
+      lastUserMessageIndex = i;
+      break;
+    }
+  }
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (i <= lastUserMessageIndex) {
+      break;
+    }
+    const message = messages[i];
+    if (message.role === "assistant" && message.id) {
+      return message.id;
+    }
+  }
+  return "";
+}
+
+function extractTaskPollingMetaFromDataPart(dataPart: unknown): TaskPollingMeta | null {
+  if (!dataPart || typeof dataPart !== "object") {
+    return null;
+  }
+
+  const candidate = dataPart as DataTaskAuthPart;
+  if (candidate.type !== "data-task-auth" || !candidate.data) {
+    return null;
+  }
+
+  const runId = typeof candidate.data.runId === "string" ? candidate.data.runId : "";
+  const rawCursor = candidate.data.cursor;
+  const cursor =
+    typeof rawCursor === "number" ? Math.trunc(rawCursor) : Number.parseInt(String(rawCursor ?? ""), 10);
+  const cursorSig = typeof candidate.data.cursorSig === "string" ? candidate.data.cursorSig : "";
+
+  if (!runId || !Number.isFinite(cursor) || cursor < 0 || !cursorSig) {
+    return null;
+  }
+
+  return { runId, cursor, cursorSig };
+}
+
 export function Chat({
   id,
   initialMessages,
@@ -166,6 +219,7 @@ export function Chat({
   const pollingCursorRef = useRef<Map<string, number>>(new Map());
   const pollingCursorSigRef = useRef<Map<string, string>>(new Map());
   const pollingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const pendingTaskMetaRef = useRef<TaskPollingMeta | null>(null);
   const setMessagesRef = useRef<SetChatMessages | null>(null);
   const hasRecoveredWatchdogRef = useRef(false);
   const unmountedRef = useRef(false);
@@ -187,6 +241,7 @@ export function Chat({
         controller.abort();
       }
       pollingAbortControllersRef.current.clear();
+      pendingTaskMetaRef.current = null;
     };
   }, []);
 
@@ -512,6 +567,10 @@ export function Chat({
     }),
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
+      const taskMeta = extractTaskPollingMetaFromDataPart(dataPart);
+      if (taskMeta) {
+        pendingTaskMetaRef.current = taskMeta;
+      }
     },
     onFinish: ({ message, isAbort, isError }) => {
       mutate(unstable_serialize(getChatHistoryPaginationKey));
@@ -520,10 +579,12 @@ export function Chat({
         return;
       }
 
-      const taskMeta = extractTaskPollingMetaFromMessage(message as ChatMessage);
+      const taskMeta =
+        extractTaskPollingMetaFromMessage(message as ChatMessage) || pendingTaskMetaRef.current;
       if (!taskMeta) {
         return;
       }
+      pendingTaskMetaRef.current = null;
 
       // Create one watchdog per completed /api/chat response message.
       stopAllPollingRuns(taskMeta.runId);
@@ -592,36 +653,59 @@ export function Chat({
   useEffect(() => {
     hasRecoveredWatchdogRef.current = false;
     stopAllPollingRuns();
+    pendingTaskMetaRef.current = null;
   }, [id]);
 
   useEffect(() => {
     // A new chat submit started; stop previous watchdogs immediately.
     if (status === "submitted") {
       stopAllPollingRuns();
+      pendingTaskMetaRef.current = null;
     }
   }, [status]);
 
   useEffect(() => {
-    // Fallback guard: if onFinish misses for any reason, recover from latest assistant task marker.
+    // Fallback guard: if onFinish misses for any reason, recover polling from latest task metadata.
     if (status === "submitted" || status === "streaming") {
       return;
     }
 
-    const pendingTask = findLatestTaskMessageInLatestTurn(messages);
-    if (!pendingTask) {
-      return;
-    }
-    if (pollingRunIdsRef.current.has(pendingTask.runId)) {
+    const pendingTaskFromMessage = findLatestTaskMessageInLatestTurn(messages);
+    if (pendingTaskFromMessage) {
+      if (pollingRunIdsRef.current.has(pendingTaskFromMessage.runId)) {
+        return;
+      }
+
+      stopAllPollingRuns(pendingTaskFromMessage.runId);
+      startPollingRun(
+        pendingTaskFromMessage.runId,
+        pendingTaskFromMessage.messageId,
+        pendingTaskFromMessage.cursor,
+        pendingTaskFromMessage.cursorSig
+      );
       return;
     }
 
-    stopAllPollingRuns(pendingTask.runId);
+    const pendingTaskFromData = pendingTaskMetaRef.current;
+    if (!pendingTaskFromData) {
+      return;
+    }
+    if (pollingRunIdsRef.current.has(pendingTaskFromData.runId)) {
+      return;
+    }
+    const latestAssistantMessageId = findLatestAssistantMessageIdInLatestTurn(messages);
+    if (!latestAssistantMessageId) {
+      return;
+    }
+
+    stopAllPollingRuns(pendingTaskFromData.runId);
     startPollingRun(
-      pendingTask.runId,
-      pendingTask.messageId,
-      pendingTask.cursor,
-      pendingTask.cursorSig
+      pendingTaskFromData.runId,
+      latestAssistantMessageId,
+      pendingTaskFromData.cursor,
+      pendingTaskFromData.cursorSig
     );
+    pendingTaskMetaRef.current = null;
   }, [messages, status]);
 
   useEffect(() => {

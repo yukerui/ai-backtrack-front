@@ -13,6 +13,7 @@ import {
   compareAndSwapTaskCursorState,
   getTaskCursorState,
   getTaskOwnerTtlSeconds,
+  getTaskRunMessageId,
   getTaskRunOwner,
   hashTaskSessionId,
   readTaskSessionIdFromCookieHeader,
@@ -261,30 +262,34 @@ export async function GET(
 
   if (chatId) {
     try {
-      const marker = `[[task:${runId}]]`;
-      const messages = await getMessagesByChatId({ id: chatId });
-      const pendingMessage = [...messages]
-        .reverse()
-        .find((item) => {
-          if (item.role !== "assistant") {
-            return false;
-          }
-          const parts = Array.isArray(item.parts) ? item.parts : [];
-          const text = parts
-            .filter(
-              (part) =>
-                typeof part === "object" &&
-                part !== null &&
-                (part as { type?: unknown }).type === "text"
-            )
-            .map((part) => String((part as { text?: unknown }).text || ""))
-            .join("\n");
-          return text.includes(marker);
-        });
+      let pendingMessageId = await getTaskRunMessageId(runId);
+      if (!pendingMessageId) {
+        const marker = `[[task:${runId}]]`;
+        const messages = await getMessagesByChatId({ id: chatId });
+        const pendingMessage = [...messages]
+          .reverse()
+          .find((item) => {
+            if (item.role !== "assistant") {
+              return false;
+            }
+            const parts = Array.isArray(item.parts) ? item.parts : [];
+            const text = parts
+              .filter(
+                (part) =>
+                  typeof part === "object" &&
+                  part !== null &&
+                  (part as { type?: unknown }).type === "text"
+              )
+              .map((part) => String((part as { text?: unknown }).text || ""))
+              .join("\n");
+            return text.includes(marker);
+          });
+        pendingMessageId = pendingMessage?.id || null;
+      }
 
-      if (pendingMessage) {
+      if (pendingMessageId) {
         await updateMessage({
-          id: pendingMessage.id,
+          id: pendingMessageId,
           parts: [
             {
               type: "text",

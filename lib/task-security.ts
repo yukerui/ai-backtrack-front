@@ -9,6 +9,7 @@ import { TASK_SESSION_COOKIE_NAME } from "./constants";
 import { getRedisClient } from "./redis";
 
 const TASK_OWNER_KEY_PREFIX = "task:owner:";
+const TASK_MESSAGE_KEY_PREFIX = "task:message:";
 const TASK_CURSOR_VALUE_KEY_PREFIX = "task:cursor:value:";
 const TASK_CURSOR_SIG_KEY_PREFIX = "task:cursor:sig:";
 const DEFAULT_TASK_OWNER_TTL_SECONDS = 2 * 60 * 60;
@@ -70,6 +71,10 @@ function getTaskCursorSigningSecret() {
 
 function taskOwnerKey(runId: string) {
   return `${TASK_OWNER_KEY_PREFIX}${runId}`;
+}
+
+function taskMessageKey(runId: string) {
+  return `${TASK_MESSAGE_KEY_PREFIX}${runId}`;
 }
 
 function taskCursorValueKey(runId: string, sidHash: string) {
@@ -235,6 +240,28 @@ export async function getTaskRunOwner(runId: string) {
     return null;
   }
   return parsed as TaskRunOwnerRecord;
+}
+
+export async function saveTaskRunMessageId({
+  runId,
+  messageId,
+  ttlSeconds = getTaskOwnerTtlSeconds(),
+}: {
+  runId: string;
+  messageId: string;
+  ttlSeconds?: number;
+}) {
+  const client = getRedisClient();
+  await client.set(taskMessageKey(runId), messageId, { ex: ttlSeconds });
+}
+
+export async function getTaskRunMessageId(runId: string) {
+  const client = getRedisClient();
+  const raw = await client.get<unknown>(taskMessageKey(runId));
+  if (typeof raw !== "string" || !raw) {
+    return null;
+  }
+  return raw;
 }
 
 export async function initializeTaskCursorState({
