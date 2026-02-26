@@ -35,6 +35,56 @@ function normalizeRemoteBase(raw: string) {
   }
   return trimmed;
 }
+
+function isLoopbackHost(hostname: string) {
+  const lower = hostname.toLowerCase();
+  return (
+    lower === "127.0.0.1" ||
+    lower === "localhost" ||
+    lower === "::1" ||
+    lower.endsWith(".localhost")
+  );
+}
+
+function getRequestHost(requestUrl: string) {
+  try {
+    return new URL(requestUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function inferRemoteBaseFromRequest(requestUrl: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(requestUrl);
+  } catch {
+    return "";
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host === "www.freebacktrack.tech" || host === "freebacktrack.tech") {
+    return `${parsed.protocol}//ai-backend.freebacktrack.tech`;
+  }
+  return "";
+}
+
+function resolveRemoteBase(requestUrl: string) {
+  const configured = process.env.ARTIFACTS_REMOTE_BASE || process.env.CLAUDE_CODE_API_BASE || "";
+  if (configured) {
+    const normalized = normalizeRemoteBase(configured);
+    try {
+      const parsed = new URL(normalized);
+      const requestHost = getRequestHost(requestUrl);
+      if (!isLoopbackHost(parsed.hostname) || isLoopbackHost(requestHost)) {
+        return normalized;
+      }
+    } catch {
+      return normalized;
+    }
+  }
+  return inferRemoteBaseFromRequest(requestUrl);
+}
 const TOKEN_TTL_MS = Number.parseInt(process.env.ARTIFACTS_TOKEN_TTL_MS || "3600000", 10);
 const ARTIFACTS_SIGNING_SECRET =
   process.env.ARTIFACTS_SIGNING_SECRET ||
@@ -164,12 +214,10 @@ export async function GET(request: Request) {
     }
   }
 
-  const remoteBase =
-    process.env.ARTIFACTS_REMOTE_BASE || process.env.CLAUDE_CODE_API_BASE || "";
+  const remoteBase = resolveRemoteBase(request.url);
   if (remoteBase && token) {
-    const base = normalizeRemoteBase(remoteBase);
     try {
-      const upstream = await fetch(`${base}/artifacts?token=${encodeURIComponent(token)}`, {
+      const upstream = await fetch(`${remoteBase}/artifacts?token=${encodeURIComponent(token)}`, {
         headers: {
           accept: "text/html, text/csv, application/json, text/plain",
         },
