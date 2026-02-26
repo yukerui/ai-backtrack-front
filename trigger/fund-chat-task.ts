@@ -9,6 +9,7 @@ import {
 
 const payloadSchema = z.object({
   userId: z.string(),
+  userType: z.enum(["guest", "regular"]).optional(),
   chatId: z.string(),
   userText: z.string().min(1),
   model: z.string().optional(),
@@ -260,11 +261,12 @@ export const fundChatTask = schemaTask({
   schema: payloadSchema,
   maxDuration: TASK_MAX_DURATION_SECONDS,
   run: async (
-    { userId, chatId, userText, model, isNewChat, turnstileToken, policyPrechecked },
+    { userId, userType, chatId, userText, model, isNewChat, turnstileToken, policyPrechecked },
     { signal }
   ) => {
     taskDebug("task_started", {
       userId,
+      userType: userType || "",
       chatId,
       model: model || "gpt-5.3-codex",
       isNewChat: Boolean(isNewChat),
@@ -287,6 +289,7 @@ export const fundChatTask = schemaTask({
       authorization: `Bearer ${token}`,
       "x-chat-id": chatId,
       "x-chat-new": isNewChat ? "true" : "false",
+      "x-user-type": userType === "guest" ? "guest" : "regular",
     };
     if (turnstileToken?.trim()) {
       const token = turnstileToken.trim();

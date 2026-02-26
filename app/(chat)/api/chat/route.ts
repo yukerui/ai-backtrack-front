@@ -204,11 +204,13 @@ async function precheckClaudeProxyInput({
   chatId,
   isNewChat,
   userText,
+  userType,
   turnstileToken,
 }: {
   chatId: string;
   isNewChat: boolean;
   userText: string;
+  userType: UserType;
   turnstileToken?: string;
 }): Promise<ClaudeProxyPrecheckResult> {
   const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
@@ -225,6 +227,7 @@ async function precheckClaudeProxyInput({
       authorization: `Bearer ${token}`,
       "x-chat-id": chatId,
       "x-chat-new": isNewChat ? "true" : "false",
+      "x-user-type": userType,
       ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
     },
     body: JSON.stringify({
@@ -285,12 +288,14 @@ async function streamFromClaudeProxy({
   chatId,
   isNewChat,
   userText,
+  userType,
   turnstileToken,
 }: {
   dataStream: any;
   chatId: string;
   isNewChat: boolean;
   userText: string;
+  userType: UserType;
   turnstileToken?: string;
 }) {
   const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
@@ -308,6 +313,7 @@ async function streamFromClaudeProxy({
       authorization: `Bearer ${token}`,
       "x-chat-id": chatId,
       "x-chat-new": isNewChat ? "true" : "false",
+      "x-user-type": userType,
       ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
     },
     body: JSON.stringify({
@@ -676,6 +682,7 @@ export async function POST(request: Request) {
             chatId: id,
             isNewChat: !chat,
             userText,
+            userType,
             turnstileToken,
           });
           chatDebug("trigger_precheck_done", {
@@ -709,6 +716,7 @@ export async function POST(request: Request) {
             "fund-chat-task",
             {
               userId: session.user.id,
+              userType,
               chatId: id,
               userText,
               model: FIXED_CHAT_MODEL,
@@ -956,6 +964,7 @@ export async function POST(request: Request) {
             chatId: id,
             isNewChat: !chat,
             userText,
+            userType,
             turnstileToken,
           });
         }
