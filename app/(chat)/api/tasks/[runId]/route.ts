@@ -9,6 +9,16 @@ import {
 } from "@/trigger/streams";
 import { enrichAssistantText } from "@/lib/artifacts";
 import { getMessagesByChatId, updateMessage } from "@/lib/db/queries";
+import {
+  compareAndSwapTaskCursorState,
+  getTaskCursorState,
+  getTaskOwnerTtlSeconds,
+  getTaskRunOwner,
+  hashTaskSessionId,
+  readTaskSessionIdFromCookieHeader,
+  signTaskCursor,
+  verifyTaskCursorSignature,
+} from "@/lib/task-security";
 
 type RawTaskOutput =
   | string
@@ -95,6 +105,10 @@ function normalizeCursor(value: string | null) {
   return parsed;
 }
 
+function forbiddenTaskAccess(cause: string) {
+  return NextResponse.json({ error: "Forbidden", cause }, { status: 403 });
+}
+
 async function readRealtimeSnapshot(runId: string, cursor: number) {
   const chunks: FundChatRealtimeChunk[] = [];
   let nextCursor = cursor;
@@ -144,19 +158,80 @@ export async function GET(
   const { runId } = await params;
   const { searchParams } = new URL(request.url);
   const cursor = normalizeCursor(searchParams.get("cursor"));
+  const cursorSig = (searchParams.get("cursor_sig") || "").trim();
+  if (!cursorSig) {
+    return forbiddenTaskAccess("missing_cursor_sig");
+  }
+
+  const taskSessionId = readTaskSessionIdFromCookieHeader(
+    request.headers.get("cookie")
+  );
+  if (!taskSessionId) {
+    return forbiddenTaskAccess("missing_task_session");
+  }
+  const taskSessionHash = hashTaskSessionId(taskSessionId);
+
+  const owner = await getTaskRunOwner(runId);
+  if (!owner) {
+    return forbiddenTaskAccess("task_owner_not_found");
+  }
+  if (owner.userId !== session.user.id) {
+    return forbiddenTaskAccess("task_owner_mismatch");
+  }
+  if (owner.sidHash !== taskSessionHash) {
+    return forbiddenTaskAccess("task_session_mismatch");
+  }
+
+  const isCursorSigValid = verifyTaskCursorSignature({
+    token: cursorSig,
+    runId,
+    sidHash: taskSessionHash,
+    cursor,
+  });
+  if (!isCursorSigValid) {
+    return forbiddenTaskAccess("invalid_cursor_sig");
+  }
+
+  const cursorState = await getTaskCursorState({
+    runId,
+    sidHash: taskSessionHash,
+  });
+  if (!cursorState || cursorState.cursor !== cursor || cursorState.sig !== cursorSig) {
+    return forbiddenTaskAccess("stale_cursor_state");
+  }
+
   const run = await runs.retrieve<typeof fundChatTask>(runId);
   const payloadUserId = (run.payload as { userId?: string } | null)?.userId;
   if (payloadUserId && payloadUserId !== session.user.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return forbiddenTaskAccess("run_payload_user_mismatch");
   }
   const realtimeSnapshot = await readRealtimeSnapshot(runId, cursor);
+  const nextCursor = realtimeSnapshot.nextCursor;
+  const nextCursorSig = signTaskCursor({
+    runId,
+    sidHash: taskSessionHash,
+    cursor: nextCursor,
+  });
+  const cursorAdvanced = await compareAndSwapTaskCursorState({
+    runId,
+    sidHash: taskSessionHash,
+    expectedCursor: cursor,
+    expectedSig: cursorSig,
+    nextCursor,
+    nextSig: nextCursorSig,
+    ttlSeconds: getTaskOwnerTtlSeconds(),
+  });
+  if (!cursorAdvanced) {
+    return forbiddenTaskAccess("cursor_advance_conflict");
+  }
 
   if (run.status !== "COMPLETED") {
     return NextResponse.json({
       status: run.status,
       isCompleted: false,
       isFailed: FAILURE_STATUSES.has(run.status),
-      nextCursor: realtimeSnapshot.nextCursor,
+      nextCursor,
+      nextCursorSig,
       reasoningText: realtimeSnapshot.reasoningText,
       text: realtimeSnapshot.text,
       error: run.error || null,
@@ -227,7 +302,8 @@ export async function GET(
   return NextResponse.json({
     status: run.status,
     isCompleted: true,
-    nextCursor: realtimeSnapshot.nextCursor,
+    nextCursor,
+    nextCursorSig,
     reasoningText: realtimeSnapshot.reasoningText,
     text: enriched,
     artifacts: normalized.artifacts,

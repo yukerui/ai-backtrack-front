@@ -1,6 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
-import { guestRegex, isDevelopmentEnvironment } from "./lib/constants";
+import {
+  guestRegex,
+  isDevelopmentEnvironment,
+  TASK_SESSION_COOKIE_NAME,
+} from "./lib/constants";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -37,7 +41,22 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
-  return NextResponse.next();
+  const response = NextResponse.next();
+  const taskSessionCookie = request.cookies.get(TASK_SESSION_COOKIE_NAME)?.value;
+  if (!taskSessionCookie) {
+    const sid = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
+    response.cookies.set({
+      name: TASK_SESSION_COOKIE_NAME,
+      value: sid,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: !isDevelopmentEnvironment,
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
+  }
+
+  return response;
 }
 
 export const config = {

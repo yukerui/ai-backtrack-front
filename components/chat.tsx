@@ -32,8 +32,8 @@ import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
 
-const TASK_MARKER_REGEX = /\[\[task:([A-Za-z0-9_-]+)\]\]/g;
-const TASK_PROGRESS_URL_REGEX = /\/api\/tasks\/([A-Za-z0-9_-]+)/g;
+const TASK_AUTH_REGEX =
+  /\[\[task-auth:([A-Za-z0-9_-]+):([0-9]+):([A-Za-z0-9._-]+)\]\]/g;
 const TASK_POLL_INTERVAL_MS = 2000;
 
 type TaskStatusResponse = {
@@ -41,8 +41,15 @@ type TaskStatusResponse = {
   isCompleted: boolean;
   isFailed?: boolean;
   nextCursor?: number;
+  nextCursorSig?: string;
   reasoningText?: string;
   text?: string;
+};
+
+type TaskPollingMeta = {
+  runId: string;
+  cursor: number;
+  cursorSig: string;
 };
 
 type SetChatMessages = (
@@ -68,22 +75,21 @@ function extractReasoningText(message: ChatMessage) {
     .join("\n");
 }
 
-function extractTaskRunIdFromMessage(message: ChatMessage) {
+function extractTaskPollingMetaFromMessage(message: ChatMessage): TaskPollingMeta | null {
   const text = extractMessageText(message);
-  const candidateIds: string[] = [];
+  let latest: TaskPollingMeta | null = null;
 
-  for (const match of text.matchAll(TASK_MARKER_REGEX)) {
-    if (match[1]) {
-      candidateIds.push(match[1]);
+  for (const match of text.matchAll(TASK_AUTH_REGEX)) {
+    const runId = match[1] || "";
+    const cursor = Number.parseInt(match[2] || "", 10);
+    const cursorSig = match[3] || "";
+    if (!runId || !Number.isFinite(cursor) || cursor < 0 || !cursorSig) {
+      continue;
     }
-  }
-  for (const match of text.matchAll(TASK_PROGRESS_URL_REGEX)) {
-    if (match[1]) {
-      candidateIds.push(match[1]);
-    }
+    latest = { runId, cursor, cursorSig };
   }
 
-  return candidateIds.at(-1) || "";
+  return latest;
 }
 
 function findLatestTaskMessageInLatestTurn(messages: ChatMessage[]) {
@@ -103,11 +109,11 @@ function findLatestTaskMessageInLatestTurn(messages: ChatMessage[]) {
     if (message.role !== "assistant") {
       continue;
     }
-    const runId = extractTaskRunIdFromMessage(message);
-    if (!runId) {
+    const taskMeta = extractTaskPollingMetaFromMessage(message);
+    if (!taskMeta) {
       continue;
     }
-    return { runId, messageId: message.id };
+    return { ...taskMeta, messageId: message.id };
   }
 
   return null;
@@ -158,6 +164,7 @@ export function Chat({
   const pollingTimersRef = useRef<Map<string, number>>(new Map());
   const pollingMessageIdsRef = useRef<Map<string, string>>(new Map());
   const pollingCursorRef = useRef<Map<string, number>>(new Map());
+  const pollingCursorSigRef = useRef<Map<string, string>>(new Map());
   const pollingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const setMessagesRef = useRef<SetChatMessages | null>(null);
   const hasRecoveredWatchdogRef = useRef(false);
@@ -175,6 +182,7 @@ export function Chat({
       pollingRunIdsRef.current.clear();
       pollingMessageIdsRef.current.clear();
       pollingCursorRef.current.clear();
+      pollingCursorSigRef.current.clear();
       for (const controller of pollingAbortControllersRef.current.values()) {
         controller.abort();
       }
@@ -208,6 +216,7 @@ export function Chat({
     pollingTimersRef.current.delete(runId);
     pollingMessageIdsRef.current.delete(runId);
     pollingCursorRef.current.delete(runId);
+    pollingCursorSigRef.current.delete(runId);
     const controller = pollingAbortControllersRef.current.get(runId);
     if (controller) {
       controller.abort();
@@ -221,6 +230,7 @@ export function Chat({
       ...pollingTimersRef.current.keys(),
       ...pollingMessageIdsRef.current.keys(),
       ...pollingCursorRef.current.keys(),
+      ...pollingCursorSigRef.current.keys(),
       ...pollingAbortControllersRef.current.keys(),
     ]);
     for (const runId of knownRunIds) {
@@ -231,19 +241,30 @@ export function Chat({
     }
   };
 
-  const startPollingRun = (runId: string, messageId: string) => {
-    if (!runId || !messageId) {
+  const startPollingRun = (
+    runId: string,
+    messageId: string,
+    initialCursor: number,
+    initialCursorSig: string
+  ) => {
+    if (!runId || !messageId || !initialCursorSig) {
+      return;
+    }
+
+    if (pollingRunIdsRef.current.has(runId)) {
+      pollingMessageIdsRef.current.set(runId, messageId);
+      if (!pollingCursorRef.current.has(runId)) {
+        pollingCursorRef.current.set(runId, initialCursor);
+      }
+      if (!pollingCursorSigRef.current.has(runId)) {
+        pollingCursorSigRef.current.set(runId, initialCursorSig);
+      }
       return;
     }
 
     pollingMessageIdsRef.current.set(runId, messageId);
-    if (!pollingCursorRef.current.has(runId)) {
-      pollingCursorRef.current.set(runId, 0);
-    }
-
-    if (pollingRunIdsRef.current.has(runId)) {
-      return;
-    }
+    pollingCursorRef.current.set(runId, initialCursor);
+    pollingCursorSigRef.current.set(runId, initialCursorSig);
     pollingRunIdsRef.current.add(runId);
 
     const poll = async () => {
@@ -256,23 +277,42 @@ export function Chat({
       pollingAbortControllersRef.current.set(runId, controller);
       try {
         const cursor = pollingCursorRef.current.get(runId) || 0;
-        const response = await fetch(`/api/tasks/${runId}?cursor=${cursor}`, {
-          method: "GET",
-          cache: "no-store",
-          signal: controller.signal,
-        });
+        const cursorSig = pollingCursorSigRef.current.get(runId) || "";
+        if (!cursorSig) {
+          stopPollingRun(runId);
+          return;
+        }
+        const response = await fetch(
+          `/api/tasks/${runId}?cursor=${cursor}&cursor_sig=${encodeURIComponent(
+            cursorSig
+          )}`,
+          {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
         if (!response.ok) {
+          if (response.status === 403 || response.status === 401) {
+            stopPollingRun(runId);
+            return;
+          }
           throw new Error(`Task status fetch failed (${response.status})`);
         }
 
         const payload = (await response.json()) as TaskStatusResponse;
         if (
-          typeof payload.nextCursor === "number" &&
-          Number.isFinite(payload.nextCursor) &&
-          payload.nextCursor >= 0
+          typeof payload.nextCursor !== "number" ||
+          !Number.isFinite(payload.nextCursor) ||
+          payload.nextCursor < 0 ||
+          typeof payload.nextCursorSig !== "string" ||
+          !payload.nextCursorSig
         ) {
-          pollingCursorRef.current.set(runId, payload.nextCursor);
+          stopPollingRun(runId);
+          throw new Error("Task status response missing next signed cursor");
         }
+        pollingCursorRef.current.set(runId, payload.nextCursor);
+        pollingCursorSigRef.current.set(runId, payload.nextCursorSig);
 
         const activeMessageId = pollingMessageIdsRef.current.get(runId) || messageId;
         const updateMessages = setMessagesRef.current;
@@ -480,14 +520,19 @@ export function Chat({
         return;
       }
 
-      const runId = extractTaskRunIdFromMessage(message as ChatMessage);
-      if (!runId) {
+      const taskMeta = extractTaskPollingMetaFromMessage(message as ChatMessage);
+      if (!taskMeta) {
         return;
       }
 
       // Create one watchdog per completed /api/chat response message.
-      stopAllPollingRuns(runId);
-      startPollingRun(runId, message.id);
+      stopAllPollingRuns(taskMeta.runId);
+      startPollingRun(
+        taskMeta.runId,
+        message.id,
+        taskMeta.cursor,
+        taskMeta.cursorSig
+      );
     },
     onError: (error) => {
       if (error instanceof ChatSDKError) {
@@ -567,7 +612,12 @@ export function Chat({
       return;
     }
     stopAllPollingRuns(pendingTask.runId);
-    startPollingRun(pendingTask.runId, pendingTask.messageId);
+    startPollingRun(
+      pendingTask.runId,
+      pendingTask.messageId,
+      pendingTask.cursor,
+      pendingTask.cursorSig
+    );
   }, [id, initialMessages]);
 
   const { data: votes } = useSWR<Vote[]>(

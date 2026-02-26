@@ -35,6 +35,14 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
+import {
+  getTaskOwnerTtlSeconds,
+  hashTaskSessionId,
+  initializeTaskCursorState,
+  readTaskSessionIdFromCookieHeader,
+  saveTaskRunOwner,
+  signTaskCursor,
+} from "@/lib/task-security";
 import type { ChatMessage } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
@@ -711,16 +719,47 @@ export async function POST(request: Request) {
             }
           );
           const runId = handle.id;
+          const taskSessionId = readTaskSessionIdFromCookieHeader(
+            request.headers.get("cookie")
+          );
+          if (!taskSessionId) {
+            throw new Error("task_session_missing");
+          }
+          const taskSessionHash = hashTaskSessionId(taskSessionId);
+          const taskOwnerTtlSeconds = getTaskOwnerTtlSeconds();
+          const initialCursor = 0;
+          const initialCursorSig = signTaskCursor({
+            runId,
+            sidHash: taskSessionHash,
+            cursor: initialCursor,
+          });
+          await saveTaskRunOwner({
+            runId,
+            userId: session.user.id,
+            sidHash: taskSessionHash,
+            ttlSeconds: taskOwnerTtlSeconds,
+          });
+          await initializeTaskCursorState({
+            runId,
+            sidHash: taskSessionHash,
+            cursor: initialCursor,
+            cursorSig: initialCursorSig,
+            ttlSeconds: taskOwnerTtlSeconds,
+          });
           chatDebug("trigger_task_submitted", {
             chatId: id,
             runId,
             idempotencyKeyPrefix: triggerIdempotencyKey.slice(0, 12),
+            taskSessionHashPrefix: taskSessionHash.slice(0, 12),
           });
           const taskInfo = [
             "任务已提交，后台处理中。",
             `任务ID: ${runId}`,
-            `查询进度: /api/tasks/${runId}`,
+            `查询进度: /api/tasks/${runId}?cursor=${initialCursor}&cursor_sig=${encodeURIComponent(
+              initialCursorSig
+            )}`,
             `[[task:${runId}]]`,
+            `[[task-auth:${runId}:${initialCursor}:${initialCursorSig}]]`,
           ].join("\n");
           const taskInfoTextId = generateUUID();
           let taskInfoClosed = false;
@@ -1026,6 +1065,17 @@ export async function POST(request: Request) {
 
     if (error instanceof ChatSDKError) {
       return error.toResponse();
+    }
+
+    if (error instanceof Error && error.message === "task_session_missing") {
+      return Response.json(
+        {
+          code: "forbidden:chat",
+          message: "Task session is invalid. Please refresh and try again.",
+          cause: "task_session_missing",
+        },
+        { status: 403 }
+      );
     }
 
     if (
