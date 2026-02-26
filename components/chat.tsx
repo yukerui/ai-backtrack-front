@@ -602,6 +602,29 @@ export function Chat({
   }, [status]);
 
   useEffect(() => {
+    // Fallback guard: if onFinish misses for any reason, recover from latest assistant task marker.
+    if (status === "submitted" || status === "streaming") {
+      return;
+    }
+
+    const pendingTask = findLatestTaskMessageInLatestTurn(messages);
+    if (!pendingTask) {
+      return;
+    }
+    if (pollingRunIdsRef.current.has(pendingTask.runId)) {
+      return;
+    }
+
+    stopAllPollingRuns(pendingTask.runId);
+    startPollingRun(
+      pendingTask.runId,
+      pendingTask.messageId,
+      pendingTask.cursor,
+      pendingTask.cursorSig
+    );
+  }, [messages, status]);
+
+  useEffect(() => {
     if (hasRecoveredWatchdogRef.current) {
       return;
     }
