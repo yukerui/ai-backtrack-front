@@ -205,29 +205,36 @@ export async function saveTaskRunOwner({
     sidHash,
     createdAt: Date.now(),
   };
-  await client.set(taskOwnerKey(runId), JSON.stringify(value), { ex: ttlSeconds });
+  await client.set(taskOwnerKey(runId), value, { ex: ttlSeconds });
 }
 
 export async function getTaskRunOwner(runId: string) {
   const client = getRedisClient();
-  const raw = await client.get<string>(taskOwnerKey(runId));
+  const raw = await client.get<unknown>(taskOwnerKey(runId));
   if (!raw) {
     return null;
   }
 
-  try {
-    const parsed = JSON.parse(raw) as Partial<TaskRunOwnerRecord>;
-    if (
-      typeof parsed.userId !== "string" ||
-      typeof parsed.sidHash !== "string" ||
-      typeof parsed.createdAt !== "number"
-    ) {
+  let parsed: Partial<TaskRunOwnerRecord> | null = null;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw) as Partial<TaskRunOwnerRecord>;
+    } catch {
       return null;
     }
-    return parsed as TaskRunOwnerRecord;
-  } catch {
+  } else if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    parsed = raw as Partial<TaskRunOwnerRecord>;
+  }
+
+  if (
+    !parsed ||
+    typeof parsed.userId !== "string" ||
+    typeof parsed.sidHash !== "string" ||
+    typeof parsed.createdAt !== "number"
+  ) {
     return null;
   }
+  return parsed as TaskRunOwnerRecord;
 }
 
 export async function initializeTaskCursorState({
@@ -263,13 +270,14 @@ export async function getTaskCursorState({
 }) {
   const client = getRedisClient();
   const [cursorRaw, sig] = await Promise.all([
-    client.get<string>(taskCursorValueKey(runId, sidHash)),
-    client.get<string>(taskCursorSigKey(runId, sidHash)),
+    client.get<unknown>(taskCursorValueKey(runId, sidHash)),
+    client.get<unknown>(taskCursorSigKey(runId, sidHash)),
   ]);
-  if (!cursorRaw || !sig) {
+  if (cursorRaw === null || cursorRaw === undefined || typeof sig !== "string" || !sig) {
     return null;
   }
-  const cursor = Number.parseInt(cursorRaw, 10);
+  const cursor =
+    typeof cursorRaw === "number" ? Math.trunc(cursorRaw) : Number.parseInt(String(cursorRaw), 10);
   if (!Number.isFinite(cursor) || cursor < 0) {
     return null;
   }
