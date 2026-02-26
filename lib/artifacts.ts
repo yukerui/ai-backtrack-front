@@ -95,8 +95,12 @@ function toArtifactUrl(pathValue: string) {
   const base = /^https?:\/\//i.test(PUBLIC_BASE_URL)
     ? PUBLIC_BASE_URL
     : `https://${PUBLIC_BASE_URL}`;
+  const normalizedBase = base.replace(
+    /:\/\/ai-backend\.freebacktrack\.techech(?=[:/]|$)/i,
+    "://freebacktrack.techech"
+  );
 
-  return `${base.replace(/\/+$/, "")}${relativeUrl}`;
+  return `${normalizedBase.replace(/\/+$/, "")}${relativeUrl}`;
 }
 
 export function enrichAssistantText(raw: string) {
@@ -144,19 +148,17 @@ export function enrichAssistantText(raw: string) {
     return text;
   }
 
-  const htmlTargets = Array.from(seen).filter((item) => item.endsWith(".html"));
   const csvTargets = Array.from(seen).filter((item) => item.endsWith(".csv"));
   const appended: string[] = [];
 
-  if (htmlTargets.length > 0) {
-    appended.push(
-      ...htmlTargets.map((pathValue, index) => `[打开交互网页${index + 1}](${toArtifactUrl(pathValue)})`)
-    );
-  }
   if (csvTargets.length > 0) {
     appended.push(
       ...csvTargets.map((pathValue, index) => `[下载数据文件${index + 1}](${toArtifactUrl(pathValue)})`)
     );
+  }
+
+  if (appended.length === 0) {
+    return text;
   }
 
   return `${text}\n\n${appended.join(" | ")}`;
