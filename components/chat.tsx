@@ -47,11 +47,19 @@ type TaskStatusResponse = {
   isFailed?: boolean;
   nextCursor?: number;
   nextCursorSig?: string;
+  events?: TaskPollEvent[];
   reasoningText?: string;
   text?: string;
   artifacts?: BacktestArtifactItem[];
   plotlyCharts?: PlotlyChartPayload[];
 };
+
+type TaskPollEvent =
+  | { type: "reasoning-delta"; delta: string }
+  | { type: "text-delta"; delta: string }
+  | { type: "text-replace"; text: string }
+  | { type: "plotly-spec"; chart: PlotlyChartPayload }
+  | { type: "artifact-items"; items: BacktestArtifactItem[] };
 
 type TaskPollingMeta = {
   runId: string;
@@ -138,6 +146,88 @@ function normalizePlotlyCharts(value: unknown): PlotlyChartPayload[] {
     normalized.push(chart);
   }
   return normalized;
+}
+
+function normalizeTaskPollEvents(value: unknown): TaskPollEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: TaskPollEvent[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const candidate = entry as Record<string, unknown>;
+    const type = typeof candidate.type === "string" ? candidate.type : "";
+
+    if (type === "reasoning-delta" || type === "text-delta") {
+      if (typeof candidate.delta === "string" && candidate.delta) {
+        normalized.push({ type, delta: candidate.delta });
+      }
+      continue;
+    }
+
+    if (type === "text-replace") {
+      if (typeof candidate.text === "string") {
+        normalized.push({ type: "text-replace", text: candidate.text });
+      }
+      continue;
+    }
+
+    if (type === "plotly-spec") {
+      const charts = normalizePlotlyCharts([(candidate as { chart?: unknown }).chart]);
+      if (charts.length > 0) {
+        normalized.push({ type: "plotly-spec", chart: charts[0] });
+      }
+      continue;
+    }
+
+    if (type === "artifact-items") {
+      const items = normalizeBacktestArtifactItems((candidate as { items?: unknown }).items);
+      if (items.length > 0) {
+        normalized.push({ type: "artifact-items", items });
+      }
+    }
+  }
+
+  return normalized;
+}
+
+function extractExistingPlotlyCharts(message: ChatMessage): PlotlyChartPayload[] {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  const charts: PlotlyChartPayload[] = [];
+  for (const part of parts) {
+    if (
+      typeof part !== "object" ||
+      part === null ||
+      (part as { type?: unknown }).type !== "data-plotly-chart"
+    ) {
+      continue;
+    }
+    const normalized = normalizePlotlyCharts([
+      (part as { data?: { chart?: unknown } }).data?.chart,
+    ]);
+    if (normalized.length > 0) {
+      charts.push(normalized[0]);
+    }
+  }
+  return charts;
+}
+
+function extractExistingArtifactItems(message: ChatMessage): BacktestArtifactItem[] {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (const part of parts) {
+    if (
+      typeof part !== "object" ||
+      part === null ||
+      (part as { type?: unknown }).type !== "data-backtest-artifact"
+    ) {
+      continue;
+    }
+    return normalizeBacktestArtifactItems((part as { data?: { items?: unknown } }).data?.items);
+  }
+  return [];
 }
 
 function extractMessageText(message: ChatMessage) {
@@ -463,11 +553,33 @@ export function Chat({
           return "";
         };
 
-        const reasoningDelta =
-          typeof payload.reasoningText === "string" ? payload.reasoningText : "";
-        const textDelta = typeof payload.text === "string" ? payload.text : "";
+        const pollEvents = normalizeTaskPollEvents(payload.events);
+        if (pollEvents.length === 0) {
+          const reasoningDelta =
+            typeof payload.reasoningText === "string" ? payload.reasoningText : "";
+          const textValue = typeof payload.text === "string" ? payload.text : "";
+          if (reasoningDelta) {
+            pollEvents.push({ type: "reasoning-delta", delta: reasoningDelta });
+          }
+          if (textValue) {
+            pollEvents.push(
+              payload.isCompleted
+                ? { type: "text-replace", text: textValue }
+                : { type: "text-delta", delta: textValue }
+            );
+          }
+          if (payload.isCompleted) {
+            for (const chart of normalizePlotlyCharts(payload.plotlyCharts)) {
+              pollEvents.push({ type: "plotly-spec", chart });
+            }
+            const artifactItems = normalizeBacktestArtifactItems(payload.artifacts);
+            if (artifactItems.length > 0) {
+              pollEvents.push({ type: "artifact-items", items: artifactItems });
+            }
+          }
+        }
 
-        if (!payload.isCompleted && !payload.isFailed && (reasoningDelta || textDelta)) {
+        if (pollEvents.length > 0 || payload.isCompleted) {
           updateMessages((current) => {
             const targetMessageId = resolveTargetMessageId(current);
             if (!targetMessageId) {
@@ -478,19 +590,49 @@ export function Chat({
               if (msg.id !== targetMessageId) {
                 return msg;
               }
-              const existingReasoning = extractReasoningText(msg);
-              const existingText = extractMessageText(msg);
-              const nextReasoning = reasoningDelta
-                ? `${existingReasoning}${reasoningDelta}`
-                : existingReasoning;
-              const nextText = textDelta ? `${existingText}${textDelta}` : existingText;
-              const streamingParts = [
+
+              let nextReasoning = extractReasoningText(msg);
+              let nextText = extractMessageText(msg);
+              const chartById = new Map<string, PlotlyChartPayload>();
+              for (const chart of extractExistingPlotlyCharts(msg)) {
+                chartById.set(chart.id, chart);
+              }
+              let artifactItems = extractExistingArtifactItems(msg);
+
+              for (const event of pollEvents) {
+                if (event.type === "reasoning-delta") {
+                  nextReasoning += event.delta;
+                  continue;
+                }
+                if (event.type === "text-delta") {
+                  nextText += event.delta;
+                  continue;
+                }
+                if (event.type === "text-replace") {
+                  nextText = event.text;
+                  continue;
+                }
+                if (event.type === "plotly-spec") {
+                  chartById.set(event.chart.id, event.chart);
+                  continue;
+                }
+                if (event.type === "artifact-items") {
+                  artifactItems = event.items;
+                }
+              }
+
+              const chartParts = [...chartById.values()].map((chart) => ({
+                type: "data-plotly-chart" as const,
+                data: { chart },
+              }));
+
+              const nextParts = [
                 ...(nextReasoning
                   ? [
                       {
                         type: "reasoning" as const,
                         text: nextReasoning,
-                        state: "streaming" as const,
+                        state: payload.isCompleted ? ("done" as const) : ("streaming" as const),
                       },
                     ]
                   : []),
@@ -502,47 +644,6 @@ export function Chat({
                       },
                     ]
                   : []),
-              ] as ChatMessage["parts"];
-              return {
-                ...msg,
-                parts: streamingParts,
-              };
-            });
-          });
-        }
-
-        const completedTextValue = typeof payload.text === "string" ? payload.text : "";
-        if (payload.isCompleted) {
-          const artifactItems = normalizeBacktestArtifactItems(payload.artifacts);
-          const plotlyCharts = normalizePlotlyCharts(payload.plotlyCharts);
-          updateMessages((current) => {
-            const targetMessageId = resolveTargetMessageId(current);
-            if (!targetMessageId) {
-              return current;
-            }
-
-            return current.map((msg) => {
-              if (msg.id !== targetMessageId) {
-                return msg;
-              }
-              const existingReasoning = extractReasoningText(msg);
-              const finalReasoning = reasoningDelta
-                ? `${existingReasoning}${reasoningDelta}`
-                : existingReasoning;
-              const completedParts = [
-                ...(finalReasoning
-                  ? [
-                      {
-                        type: "reasoning" as const,
-                        text: finalReasoning,
-                        state: "done" as const,
-                      },
-                    ]
-                  : []),
-                {
-                  type: "text" as const,
-                  text: completedTextValue,
-                },
                 ...(artifactItems.length > 0
                   ? [
                       {
@@ -553,17 +654,18 @@ export function Chat({
                       },
                     ]
                   : []),
-                ...plotlyCharts.map((chart) => ({
-                  type: "data-plotly-chart" as const,
-                  data: { chart },
-                })),
+                ...chartParts,
               ] as ChatMessage["parts"];
+
               return {
                 ...msg,
-                parts: completedParts,
+                parts: nextParts.length > 0 ? nextParts : msg.parts,
               };
             });
           });
+        }
+
+        if (payload.isCompleted) {
           stopPollingRun(runId);
           mutate(unstable_serialize(getChatHistoryPaginationKey));
           return;

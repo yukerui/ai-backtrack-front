@@ -10,6 +10,7 @@ import {
 import { buildArtifactItems } from "@/lib/artifacts";
 import { getMessagesByChatId, updateMessage } from "@/lib/db/queries";
 import { extractPlotlyChartsFromText, normalizePlotlyCharts } from "@/lib/plotly";
+import type { BacktestArtifactItem, PlotlyChartPayload } from "@/lib/types";
 import {
   compareAndSwapTaskCursorState,
   getTaskCursorState,
@@ -41,6 +42,13 @@ const FAILURE_STATUSES = new Set([
   "CANCELED",
   "EXPIRED",
 ]);
+
+type TaskPollEvent =
+  | { type: "reasoning-delta"; delta: string }
+  | { type: "text-delta"; delta: string }
+  | { type: "text-replace"; text: string }
+  | { type: "plotly-spec"; chart: PlotlyChartPayload }
+  | { type: "artifact-items"; items: BacktestArtifactItem[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -122,20 +130,34 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
     // Ignore transient stream read errors and keep polling snapshots resilient.
   }
 
-  let reasoningText = "";
-  let text = "";
+  const events: TaskPollEvent[] = [];
 
   for (const chunk of chunks) {
     if (chunk.type === "reasoning-delta") {
-      reasoningText += chunk.delta;
+      events.push({ type: "reasoning-delta", delta: chunk.delta });
       continue;
     }
     if (chunk.type === "text-delta") {
-      text += chunk.delta;
+      events.push({ type: "text-delta", delta: chunk.delta });
     }
   }
 
-  return { reasoningText, text, nextCursor };
+  return { events, nextCursor };
+}
+
+function toLegacyDeltaText(events: TaskPollEvent[]) {
+  let reasoningText = "";
+  let text = "";
+  for (const event of events) {
+    if (event.type === "reasoning-delta") {
+      reasoningText += event.delta;
+      continue;
+    }
+    if (event.type === "text-delta") {
+      text += event.delta;
+    }
+  }
+  return { reasoningText, text };
 }
 
 export async function GET(
@@ -218,14 +240,16 @@ export async function GET(
   }
 
   if (run.status !== "COMPLETED") {
+    const legacy = toLegacyDeltaText(realtimeSnapshot.events);
     return NextResponse.json({
       status: run.status,
       isCompleted: false,
       isFailed: FAILURE_STATUSES.has(run.status),
       nextCursor,
       nextCursorSig,
-      reasoningText: realtimeSnapshot.reasoningText,
-      text: realtimeSnapshot.text,
+      events: realtimeSnapshot.events,
+      reasoningText: legacy.reasoningText,
+      text: legacy.text,
       error: run.error || null,
     });
   }
@@ -264,6 +288,15 @@ export async function GET(
       : artifactItems.length > 0
         ? "已生成回测结果，请点击下方卡片查看。"
         : strippedText);
+  const completionEvents: TaskPollEvent[] = [
+    { type: "text-replace", text: finalText },
+    ...plotlyCharts.map((chart) => ({ type: "plotly-spec", chart }) as const),
+    ...(artifactItems.length > 0
+      ? [{ type: "artifact-items", items: artifactItems } as const]
+      : []),
+  ];
+  const allEvents: TaskPollEvent[] = [...realtimeSnapshot.events, ...completionEvents];
+  const legacy = toLegacyDeltaText(realtimeSnapshot.events);
   const chatId = (run.payload as { chatId?: string } | null)?.chatId;
 
   if (chatId) {
@@ -330,7 +363,8 @@ export async function GET(
     isCompleted: true,
     nextCursor,
     nextCursorSig,
-    reasoningText: realtimeSnapshot.reasoningText,
+    events: allEvents,
+    reasoningText: legacy.reasoningText,
     text: finalText,
     artifacts: artifactItems,
     plotlyCharts,
