@@ -2,8 +2,9 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useState } from "react";
 import type { Vote } from "@/lib/db/schema";
-import type { ChatMessage } from "@/lib/types";
+import type { BacktestArtifactItem, ChatMessage } from "@/lib/types";
 import { cn, linkifyUrlsAsMarkdown, sanitizeText } from "@/lib/utils";
+import { BacktestArtifactCard } from "./backtest-artifact-card";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
@@ -22,6 +23,34 @@ import { MessageEditor } from "./message-editor";
 import { MessageReasoning } from "./message-reasoning";
 import { PreviewAttachment } from "./preview-attachment";
 import { Weather } from "./weather";
+
+function normalizeBacktestArtifactItems(value: unknown): BacktestArtifactItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: BacktestArtifactItem[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const candidate = entry as Partial<BacktestArtifactItem>;
+    const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
+    const url = typeof candidate.url === "string" ? candidate.url.trim() : "";
+    const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
+    const kind =
+      candidate.kind === "backtest-html" ||
+      candidate.kind === "csv" ||
+      candidate.kind === "other"
+        ? candidate.kind
+        : "other";
+    if (!path || !url || !title) {
+      continue;
+    }
+    normalized.push({ path, url, title, kind });
+  }
+  return normalized;
+}
 
 const PurePreviewMessage = ({
   addToolApprovalResponse,
@@ -73,14 +102,17 @@ const PurePreviewMessage = ({
         <div
           className={cn("flex flex-col", {
             "gap-2 md:gap-4": message.parts?.some(
-              (p) => p.type === "text" && p.text?.trim()
+              (p) =>
+                (p.type === "text" && p.text?.trim()) ||
+                p.type === "data-backtest-artifact"
             ),
             "w-full":
               (message.role === "assistant" &&
                 (message.parts?.some(
                   (p) => p.type === "text" && p.text?.trim()
                 ) ||
-                  message.parts?.some((p) => p.type.startsWith("tool-")))) ||
+                  message.parts?.some((p) => p.type.startsWith("tool-")) ||
+                  message.parts?.some((p) => p.type === "data-backtest-artifact"))) ||
               mode === "edit",
             "max-w-[calc(100%-2.5rem)] sm:max-w-[min(fit-content,80%)]":
               message.role === "user" && mode !== "edit",
@@ -165,6 +197,16 @@ const PurePreviewMessage = ({
                   </div>
                 );
               }
+            }
+
+            if (type === "data-backtest-artifact") {
+              const items = normalizeBacktestArtifactItems(
+                (part as { data?: { items?: unknown } }).data?.items
+              );
+              if (!items.length) {
+                return null;
+              }
+              return <BacktestArtifactCard items={items} key={key} />;
             }
 
             if (type === "tool-getWeather") {

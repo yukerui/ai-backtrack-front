@@ -7,7 +7,7 @@ import {
   fundChatRealtimeStream,
   type FundChatRealtimeChunk,
 } from "@/trigger/streams";
-import { enrichAssistantText } from "@/lib/artifacts";
+import { buildArtifactItems } from "@/lib/artifacts";
 import { getMessagesByChatId, updateMessage } from "@/lib/db/queries";
 import {
   compareAndSwapTaskCursorState,
@@ -80,19 +80,6 @@ function normalizeOutput(raw: RawTaskOutput) {
     text: `\`\`\`json\n${JSON.stringify(raw, null, 2)}\n\`\`\``,
     artifacts,
   };
-}
-
-function appendArtifactsToText(text: string, artifacts: string[]) {
-  if (artifacts.length === 0) {
-    return text;
-  }
-  const missing = artifacts.filter((artifactPath) => !text.includes(artifactPath));
-  if (missing.length === 0) {
-    return text;
-  }
-  const lines = missing.map((artifactPath) => `- \`${artifactPath}\``).join("\n");
-  const prefix = text.trim() ? `${text.trim()}\n\n` : "";
-  return `${prefix}资源\n${lines}`;
 }
 
 function normalizeCursor(value: string | null) {
@@ -256,8 +243,10 @@ export async function GET(
   }
 
   const normalized = normalizeOutput(output);
-  const withArtifacts = appendArtifactsToText(normalized.text, normalized.artifacts);
-  const enriched = enrichAssistantText(withArtifacts);
+  const artifactItems = buildArtifactItems(normalized.artifacts);
+  const finalText =
+    normalized.text.trim() ||
+    (artifactItems.length > 0 ? "已生成回测结果，请点击下方卡片查看。" : normalized.text);
   const chatId = (run.payload as { chatId?: string } | null)?.chatId;
 
   if (chatId) {
@@ -288,15 +277,26 @@ export async function GET(
       }
 
       if (pendingMessageId) {
+        const parts = [
+          {
+            type: "text",
+            text: finalText,
+            state: "done",
+          },
+          ...(artifactItems.length > 0
+            ? [
+                {
+                  type: "data-backtest-artifact",
+                  data: {
+                    items: artifactItems,
+                  },
+                },
+              ]
+            : []),
+        ];
         await updateMessage({
           id: pendingMessageId,
-          parts: [
-            {
-              type: "text",
-              text: enriched,
-              state: "done",
-            },
-          ],
+          parts,
         });
       }
     } catch (persistError) {
@@ -310,7 +310,7 @@ export async function GET(
     nextCursor,
     nextCursorSig,
     reasoningText: realtimeSnapshot.reasoningText,
-    text: enriched,
-    artifacts: normalized.artifacts,
+    text: finalText,
+    artifacts: artifactItems,
   });
 }

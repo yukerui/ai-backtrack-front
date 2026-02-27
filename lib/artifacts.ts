@@ -59,6 +59,15 @@ const ARTIFACT_ROOTS = [
   path.resolve(REPO_ROOT, "front/artifacts"),
 ];
 
+export type BacktestArtifactKind = "backtest-html" | "csv" | "other";
+
+export type BacktestArtifactItem = {
+  path: string;
+  url: string;
+  kind: BacktestArtifactKind;
+  title: string;
+};
+
 function resolveArtifactPath(inputPath: string) {
   const cleaned = inputPath.replace(/^\/+/, "");
   if (cleaned.startsWith("backend/artifacts/") || cleaned.startsWith("front/artifacts/")) {
@@ -103,63 +112,55 @@ function toArtifactUrl(pathValue: string) {
   return `${normalizedBase.replace(/\/+$/, "")}${relativeUrl}`;
 }
 
-export function enrichAssistantText(raw: string) {
-  if (!raw) {
-    return raw;
+function inferArtifactKind(pathValue: string): BacktestArtifactKind {
+  if (/\.html?$/i.test(pathValue)) {
+    return "backtest-html";
+  }
+  if (/\.csv$/i.test(pathValue)) {
+    return "csv";
+  }
+  return "other";
+}
+
+function buildArtifactTitle(pathValue: string, kind: BacktestArtifactKind) {
+  const basename = path.basename(pathValue).replace(/\.(html?|csv)$/i, "");
+  const name = basename.replace(/[_-]+/g, " ").trim() || path.basename(pathValue);
+  if (kind === "backtest-html") {
+    return `${name} 图表`;
+  }
+  if (kind === "csv") {
+    return `${name} 数据`;
+  }
+  return name;
+}
+
+export function buildArtifactItems(artifactPaths: string[]): BacktestArtifactItem[] {
+  if (!Array.isArray(artifactPaths) || artifactPaths.length === 0) {
+    return [];
   }
 
-  const pathRegex = /(?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv)/g;
-  const barePathRegex =
-    /(^|[\s:：,，;；\(\)（）\[\]【】<>《》"'`])((?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv))(?![A-Za-z0-9._/-])/gm;
   const seen = new Set<string>();
+  const items: BacktestArtifactItem[] = [];
 
-  let text = raw
-    .replace(
-      /在项目根目录运行\s*`open\s+[^`]+`\s*即可在浏览器中查看，?/g,
-      "可直接点击下方链接查看，"
-    )
-    .replace(
-      /run\s+`open\s+[^`]+`\s+to\s+view\s+it\s+in\s+your\s+browser\.?/gi,
-      "open it directly from the link below."
-    )
-    .replace(/\[Image\s*#\d+\]/gi, "");
-
-  text = text.replace(
-    /`((?:backend\/|front\/)?artifacts\/[A-Za-z0-9._/-]+\.(?:html|csv))`/g,
-    (_, pathValue) => {
-      const normalized = String(pathValue);
-      seen.add(normalized);
-      return `[\`${normalized}\`](${toArtifactUrl(normalized)})`;
+  for (const candidate of artifactPaths) {
+    const input = String(candidate || "").trim();
+    if (!input) {
+      continue;
     }
-  );
+    const resolvedPath = resolveArtifactPath(input);
+    if (seen.has(resolvedPath)) {
+      continue;
+    }
+    seen.add(resolvedPath);
 
-  text = text.replace(barePathRegex, (_, prefix, pathValue) => {
-    const normalized = String(pathValue);
-    seen.add(normalized);
-    return `${prefix}[${normalized}](${toArtifactUrl(normalized)})`;
-  });
-
-  let match: RegExpExecArray | null = null;
-  while ((match = pathRegex.exec(text)) !== null) {
-    seen.add(match[0]);
+    const kind = inferArtifactKind(resolvedPath);
+    items.push({
+      path: resolvedPath,
+      url: toArtifactUrl(resolvedPath),
+      kind,
+      title: buildArtifactTitle(resolvedPath, kind),
+    });
   }
 
-  if (seen.size === 0) {
-    return text;
-  }
-
-  const csvTargets = Array.from(seen).filter((item) => item.endsWith(".csv"));
-  const appended: string[] = [];
-
-  if (csvTargets.length > 0) {
-    appended.push(
-      ...csvTargets.map((pathValue, index) => `[下载数据文件${index + 1}](${toArtifactUrl(pathValue)})`)
-    );
-  }
-
-  if (appended.length === 0) {
-    return text;
-  }
-
-  return `${text}\n\n${appended.join(" | ")}`;
+  return items;
 }

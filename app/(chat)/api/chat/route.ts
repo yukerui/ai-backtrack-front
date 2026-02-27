@@ -20,7 +20,7 @@ import { createDocument } from "@/lib/ai/tools/create-document";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
-import { enrichAssistantText } from "@/lib/artifacts";
+import { buildArtifactItems } from "@/lib/artifacts";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
@@ -432,12 +432,11 @@ async function streamFromClaudeProxy({
   }
 
   if (textBuffer) {
-    const enriched = enrichAssistantText(textBuffer);
     dataStream.write({ type: "text-start", id: textId });
     dataStream.write({
       type: "text-delta",
       id: textId,
-      delta: enriched,
+      delta: textBuffer,
     });
     dataStream.write({ type: "text-end", id: textId });
   }
@@ -593,7 +592,10 @@ export async function POST(request: Request) {
     let persistedTriggerAssistantMessageId: string | null = null;
     let triggerAssistantPersistedInExecute = false;
 
-    const persistTriggerAssistantSnapshot = async (text: string) => {
+    const persistTriggerAssistantSnapshot = async (
+      text: string,
+      preferredMessageId?: string
+    ) => {
       const trimmed = text.trim();
       if (!trimmed) {
         return;
@@ -608,7 +610,8 @@ export async function POST(request: Request) {
       ];
 
       if (!persistedTriggerAssistantMessageId) {
-        persistedTriggerAssistantMessageId = generateUUID();
+        const preferredId = String(preferredMessageId || "").trim();
+        persistedTriggerAssistantMessageId = preferredId || generateUUID();
         await saveMessages({
           messages: [
             {
@@ -702,7 +705,10 @@ export async function POST(request: Request) {
             });
             dataStream.write({ type: "text-end", id: blockedId });
             triggerAssistantTextForPersistence = blockedReply;
-            await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
+            await persistTriggerAssistantSnapshot(
+              triggerAssistantTextForPersistence,
+              blockedId
+            );
             return;
           }
 
@@ -767,7 +773,10 @@ export async function POST(request: Request) {
           const taskInfoTextId = generateUUID();
           let taskInfoClosed = false;
           triggerAssistantTextForPersistence = taskInfo;
-          await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
+          await persistTriggerAssistantSnapshot(
+            triggerAssistantTextForPersistence,
+            taskInfoTextId
+          );
           if (persistedTriggerAssistantMessageId) {
             await saveTaskRunMessageId({
               runId,
@@ -798,7 +807,10 @@ export async function POST(request: Request) {
           // Important: return immediately after enqueueing Trigger task.
           // Waiting for stream/poll here can hit Vercel maxDuration and timeout.
           closeTaskInfoText();
-          await persistTriggerAssistantSnapshot(triggerAssistantTextForPersistence);
+          await persistTriggerAssistantSnapshot(
+            triggerAssistantTextForPersistence,
+            taskInfoTextId
+          );
           chatDebug("trigger_snapshot_persisted", {
             chatId: id,
             runPersistedTextLength: triggerAssistantTextForPersistence.length,
@@ -866,19 +878,6 @@ export async function POST(request: Request) {
               };
             };
 
-            const appendArtifactsToText = (text: string, artifacts: string[]) => {
-              if (artifacts.length === 0) {
-                return text;
-              }
-              const missing = artifacts.filter((artifactPath) => !text.includes(artifactPath));
-              if (missing.length === 0) {
-                return text;
-              }
-              const lines = missing.map((artifactPath) => `- \`${artifactPath}\``).join("\n");
-              const prefix = text.trim() ? `${text.trim()}\n\n` : "";
-              return `${prefix}资源\n${lines}`;
-            };
-
             try {
               const run = await runs.poll<typeof fundChatTask>(runId, {
                 pollIntervalMs: 1500,
@@ -939,12 +938,33 @@ export async function POST(request: Request) {
               }
 
               const normalized = normalizeOutput(output);
-              const withArtifacts = appendArtifactsToText(normalized.text, normalized.artifacts);
-              const enriched = enrichAssistantText(withArtifacts);
+              const artifactItems = buildArtifactItems(normalized.artifacts);
+              const finalText =
+                normalized.text.trim() ||
+                (artifactItems.length > 0
+                  ? "已生成回测结果，请点击下方卡片查看。"
+                  : normalized.text);
+              const completedParts = [
+                {
+                  type: "text",
+                  text: finalText,
+                  state: "done",
+                },
+                ...(artifactItems.length > 0
+                  ? [
+                      {
+                        type: "data-backtest-artifact",
+                        data: {
+                          items: artifactItems,
+                        },
+                      },
+                    ]
+                  : []),
+              ];
 
               await updateMessage({
                 id: pendingMessageId,
-                parts: [{ type: "text", text: enriched, state: "done" }],
+                parts: completedParts,
               });
             } catch (persistError) {
               console.error(`[chat-api] Failed to finalize Trigger run ${runId}:`, persistError);

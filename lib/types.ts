@@ -9,6 +9,13 @@ import type { Suggestion } from "./db/schema";
 
 export type DataPart = { type: "append-message"; message: string };
 
+export type BacktestArtifactItem = {
+  path: string;
+  url: string;
+  kind: "backtest-html" | "csv" | "other";
+  title: string;
+};
+
 export const messageMetadataSchema = z.object({
   createdAt: z.string(),
 });
@@ -46,6 +53,9 @@ export type CustomUIDataTypes = {
     runId: string;
     cursor: number;
     cursorSig: string;
+  };
+  "backtest-artifact": {
+    items: BacktestArtifactItem[];
   };
 };
 

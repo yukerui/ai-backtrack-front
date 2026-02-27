@@ -22,7 +22,7 @@ import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import type { Attachment, BacktestArtifactItem, ChatMessage } from "@/lib/types";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import { Artifact } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
@@ -44,6 +44,7 @@ type TaskStatusResponse = {
   nextCursorSig?: string;
   reasoningText?: string;
   text?: string;
+  artifacts?: BacktestArtifactItem[];
 };
 
 type TaskPollingMeta = {
@@ -64,6 +65,34 @@ type DataTaskAuthPart = {
 type SetChatMessages = (
   messages: ChatMessage[] | ((messages: ChatMessage[]) => ChatMessage[])
 ) => void;
+
+function normalizeBacktestArtifactItems(value: unknown): BacktestArtifactItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: BacktestArtifactItem[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const candidate = entry as Partial<BacktestArtifactItem>;
+    const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
+    const url = typeof candidate.url === "string" ? candidate.url.trim() : "";
+    const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
+    const kind =
+      candidate.kind === "backtest-html" ||
+      candidate.kind === "csv" ||
+      candidate.kind === "other"
+        ? candidate.kind
+        : "other";
+    if (!path || !url || !title) {
+      continue;
+    }
+    normalized.push({ path, url, title, kind });
+  }
+  return normalized;
+}
 
 function extractMessageText(message: ChatMessage) {
   const parts = Array.isArray(message.parts) ? message.parts : [];
@@ -376,14 +405,31 @@ export function Chat({
           return;
         }
 
+        const resolveTargetMessageId = (current: ChatMessage[]) => {
+          if (current.some((msg) => msg.id === activeMessageId)) {
+            return activeMessageId;
+          }
+          const fallbackMessageId = findLatestAssistantMessageIdInLatestTurn(current);
+          if (fallbackMessageId) {
+            pollingMessageIdsRef.current.set(runId, fallbackMessageId);
+            return fallbackMessageId;
+          }
+          return "";
+        };
+
         const reasoningDelta =
           typeof payload.reasoningText === "string" ? payload.reasoningText : "";
         const textDelta = typeof payload.text === "string" ? payload.text : "";
 
         if (!payload.isCompleted && !payload.isFailed && (reasoningDelta || textDelta)) {
-          updateMessages((current) =>
-            current.map((msg) => {
-              if (msg.id !== activeMessageId) {
+          updateMessages((current) => {
+            const targetMessageId = resolveTargetMessageId(current);
+            if (!targetMessageId) {
+              return current;
+            }
+
+            return current.map((msg) => {
+              if (msg.id !== targetMessageId) {
                 return msg;
               }
               const existingReasoning = extractReasoningText(msg);
@@ -415,15 +461,21 @@ export function Chat({
                 ...msg,
                 parts: streamingParts,
               };
-            })
-          );
+            });
+          });
         }
 
         const completedTextValue = typeof payload.text === "string" ? payload.text : "";
         if (payload.isCompleted) {
-          updateMessages((current) =>
-            current.map((msg) => {
-              if (msg.id !== activeMessageId) {
+          const artifactItems = normalizeBacktestArtifactItems(payload.artifacts);
+          updateMessages((current) => {
+            const targetMessageId = resolveTargetMessageId(current);
+            if (!targetMessageId) {
+              return current;
+            }
+
+            return current.map((msg) => {
+              if (msg.id !== targetMessageId) {
                 return msg;
               }
               const existingReasoning = extractReasoningText(msg);
@@ -444,30 +496,45 @@ export function Chat({
                   type: "text" as const,
                   text: completedTextValue,
                 },
+                ...(artifactItems.length > 0
+                  ? [
+                      {
+                        type: "data-backtest-artifact" as const,
+                        data: {
+                          items: artifactItems,
+                        },
+                      },
+                    ]
+                  : []),
               ] as ChatMessage["parts"];
               return {
                 ...msg,
                 parts: completedParts,
               };
-            })
-          );
+            });
+          });
           stopPollingRun(runId);
           mutate(unstable_serialize(getChatHistoryPaginationKey));
           return;
         }
 
         if (payload.isFailed) {
-          updateMessages((current) =>
-            current.map((msg) => {
-              if (msg.id !== activeMessageId) {
+          updateMessages((current) => {
+            const targetMessageId = resolveTargetMessageId(current);
+            if (!targetMessageId) {
+              return current;
+            }
+
+            return current.map((msg) => {
+              if (msg.id !== targetMessageId) {
                 return msg;
               }
               return {
                 ...msg,
                 parts: [{ type: "text", text: `任务执行失败：${payload.status}` }],
               };
-            })
-          );
+            });
+          });
           stopPollingRun(runId);
           return;
         }
@@ -647,6 +714,10 @@ export function Chat({
             // ignore and let the user continue manually if reconnection fails
           });
         }
+        return;
+      }
+
+      if (pollingRunIdsRef.current.size > 0) {
         return;
       }
 
