@@ -1,4 +1,4 @@
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { auth } from "@/app/(auth)/auth";
@@ -32,11 +32,11 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
 
   if (chat.visibility === "private") {
     if (!session.user) {
-      return notFound();
+      redirect("/");
     }
 
     if (session.user.id !== chat.userId) {
-      return notFound();
+      redirect("/");
     }
   }
 
