@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -612,6 +612,51 @@ export function Chat({
   });
 
   setMessagesRef.current = setMessages;
+
+  const refetchMessages = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/chat/${id}/messages`, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = (await response.json()) as { messages?: ChatMessage[] };
+      if (!Array.isArray(payload.messages)) {
+        return;
+      }
+
+      setMessages(payload.messages);
+    } catch {
+      // ignore transient refresh failures from background/foreground switches
+    }
+  }, [id, setMessages]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      if (status === "submitted" || status === "streaming") {
+        if (autoResume) {
+          void resumeStream().catch(() => {
+            // ignore and let the user continue manually if reconnection fails
+          });
+        }
+        return;
+      }
+
+      void refetchMessages();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [autoResume, refetchMessages, resumeStream, status]);
 
   const searchParams = useSearchParams();
   const query = searchParams.get("query");
