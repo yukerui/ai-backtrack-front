@@ -360,6 +360,7 @@ async function streamFromClaudeProxy({
   let buffer = "";
   let textBuffer = "";
   let reasoningStarted = false;
+  let textStarted = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -398,7 +399,7 @@ async function streamFromClaudeProxy({
       }
 
       const delta = parsed?.choices?.[0]?.delta?.content;
-    const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning;
+      const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning;
       const textDelta =
         typeof delta === "string"
           ? delta
@@ -407,23 +408,32 @@ async function streamFromClaudeProxy({
                 .map((part) => (typeof part?.text === "string" ? part.text : ""))
                 .join("")
             : "";
-    const normalizedReasoning =
-      typeof reasoningDelta === "string" ? reasoningDelta : "";
+      const normalizedReasoning =
+        typeof reasoningDelta === "string" ? reasoningDelta : "";
 
-    if (normalizedReasoning) {
-      if (!reasoningStarted) {
-        dataStream.write({ type: "reasoning-start", id: reasoningId });
-        reasoningStarted = true;
+      if (normalizedReasoning) {
+        if (!reasoningStarted) {
+          dataStream.write({ type: "reasoning-start", id: reasoningId });
+          reasoningStarted = true;
+        }
+        dataStream.write({
+          type: "reasoning-delta",
+          id: reasoningId,
+          delta: normalizedReasoning,
+        });
       }
-      dataStream.write({
-        type: "reasoning-delta",
-        id: reasoningId,
-        delta: normalizedReasoning,
-      });
-    }
 
       if (textDelta) {
         textBuffer += textDelta;
+        if (!textStarted) {
+          dataStream.write({ type: "text-start", id: textId });
+          textStarted = true;
+        }
+        dataStream.write({
+          type: "text-delta",
+          id: textId,
+          delta: textDelta,
+        });
       }
     }
   }
@@ -432,29 +442,33 @@ async function streamFromClaudeProxy({
     dataStream.write({ type: "reasoning-end", id: reasoningId });
   }
 
-  if (textBuffer) {
-    const { text: normalizedText, charts } = extractPlotlyChartsFromText(
-      textBuffer,
-      `stream-${chatId}`
-    );
+  const { text: normalizedText, charts } = extractPlotlyChartsFromText(
+    textBuffer,
+    `stream-${chatId}`
+  );
+
+  if (!textStarted && textBuffer) {
     const textForReply =
       normalizedText.trim() ||
       (charts.length > 0 ? "已生成交互图表，请在下方图表卡片查看。" : normalizedText);
-
     dataStream.write({ type: "text-start", id: textId });
     dataStream.write({
       type: "text-delta",
       id: textId,
       delta: textForReply,
     });
-    dataStream.write({ type: "text-end", id: textId });
+    textStarted = true;
+  }
 
-    for (const chart of charts) {
-      dataStream.write({
-        type: "data-plotly-chart",
-        data: { chart },
-      });
-    }
+  if (textStarted) {
+    dataStream.write({ type: "text-end", id: textId });
+  }
+
+  for (const chart of charts) {
+    dataStream.write({
+      type: "data-plotly-chart",
+      data: { chart },
+    });
   }
 }
 
