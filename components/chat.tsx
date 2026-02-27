@@ -37,8 +37,8 @@ import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
 
-const TASK_AUTH_REGEX =
-  /\[\[task-auth:([A-Za-z0-9_-]+):([0-9]+):([A-Za-z0-9._-]+)\]\]/g;
+const TASK_AUTH_PATTERN =
+  "\\[\\[task-auth:([A-Za-z0-9_-]+):([0-9]+):([A-Za-z0-9._-]+)\\]\\]";
 const TASK_POLL_INTERVAL_MS = 2000;
 
 type TaskStatusResponse = {
@@ -80,7 +80,9 @@ type SetChatMessages = (
   messages: ChatMessage[] | ((messages: ChatMessage[]) => ChatMessage[])
 ) => void;
 
-function normalizeBacktestArtifactItems(value: unknown): BacktestArtifactItem[] {
+function normalizeBacktestArtifactItems(
+  value: unknown
+): BacktestArtifactItem[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -91,9 +93,11 @@ function normalizeBacktestArtifactItems(value: unknown): BacktestArtifactItem[] 
       continue;
     }
     const candidate = entry as Partial<BacktestArtifactItem>;
-    const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
+    const path =
+      typeof candidate.path === "string" ? candidate.path.trim() : "";
     const url = typeof candidate.url === "string" ? candidate.url.trim() : "";
-    const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
+    const title =
+      typeof candidate.title === "string" ? candidate.title.trim() : "";
     const kind =
       candidate.kind === "backtest-html" ||
       candidate.kind === "csv" ||
@@ -127,16 +131,21 @@ function normalizePlotlyCharts(value: unknown): PlotlyChartPayload[] {
       id,
       data: data
         .filter(
-          (item: unknown) => typeof item === "object" && item !== null && !Array.isArray(item)
+          (item: unknown) =>
+            typeof item === "object" && item !== null && !Array.isArray(item)
         )
         .map((item: unknown) => ({ ...(item as Record<string, unknown>) })),
       ...(typeof candidate.title === "string" && candidate.title.trim()
         ? { title: candidate.title.trim() }
         : {}),
-      ...(candidate.layout && typeof candidate.layout === "object" && !Array.isArray(candidate.layout)
+      ...(candidate.layout &&
+      typeof candidate.layout === "object" &&
+      !Array.isArray(candidate.layout)
         ? { layout: { ...(candidate.layout as Record<string, unknown>) } }
         : {}),
-      ...(candidate.config && typeof candidate.config === "object" && !Array.isArray(candidate.config)
+      ...(candidate.config &&
+      typeof candidate.config === "object" &&
+      !Array.isArray(candidate.config)
         ? { config: { ...(candidate.config as Record<string, unknown>) } }
         : {}),
     };
@@ -176,7 +185,9 @@ function normalizeTaskPollEvents(value: unknown): TaskPollEvent[] {
     }
 
     if (type === "plotly-spec") {
-      const charts = normalizePlotlyCharts([(candidate as { chart?: unknown }).chart]);
+      const charts = normalizePlotlyCharts([
+        (candidate as { chart?: unknown }).chart,
+      ]);
       if (charts.length > 0) {
         normalized.push({ type: "plotly-spec", chart: charts[0] });
       }
@@ -184,7 +195,9 @@ function normalizeTaskPollEvents(value: unknown): TaskPollEvent[] {
     }
 
     if (type === "artifact-items") {
-      const items = normalizeBacktestArtifactItems((candidate as { items?: unknown }).items);
+      const items = normalizeBacktestArtifactItems(
+        (candidate as { items?: unknown }).items
+      );
       if (items.length > 0) {
         normalized.push({ type: "artifact-items", items });
       }
@@ -194,7 +207,9 @@ function normalizeTaskPollEvents(value: unknown): TaskPollEvent[] {
   return normalized;
 }
 
-function extractExistingPlotlyCharts(message: ChatMessage): PlotlyChartPayload[] {
+function extractExistingPlotlyCharts(
+  message: ChatMessage
+): PlotlyChartPayload[] {
   const parts = Array.isArray(message.parts) ? message.parts : [];
   const charts: PlotlyChartPayload[] = [];
   for (const part of parts) {
@@ -215,7 +230,9 @@ function extractExistingPlotlyCharts(message: ChatMessage): PlotlyChartPayload[]
   return charts;
 }
 
-function extractExistingArtifactItems(message: ChatMessage): BacktestArtifactItem[] {
+function extractExistingArtifactItems(
+  message: ChatMessage
+): BacktestArtifactItem[] {
   const parts = Array.isArray(message.parts) ? message.parts : [];
   for (const part of parts) {
     if (
@@ -225,7 +242,9 @@ function extractExistingArtifactItems(message: ChatMessage): BacktestArtifactIte
     ) {
       continue;
     }
-    return normalizeBacktestArtifactItems((part as { data?: { items?: unknown } }).data?.items);
+    return normalizeBacktestArtifactItems(
+      (part as { data?: { items?: unknown } }).data?.items
+    );
   }
   return [];
 }
@@ -233,7 +252,12 @@ function extractExistingArtifactItems(message: ChatMessage): BacktestArtifactIte
 function extractMessageText(message: ChatMessage) {
   const parts = Array.isArray(message.parts) ? message.parts : [];
   return parts
-    .filter((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text")
+    .filter(
+      (part) =>
+        typeof part === "object" &&
+        part !== null &&
+        (part as { type?: unknown }).type === "text"
+    )
     .map((part) => String((part as { text?: unknown }).text || ""))
     .join("\n");
 }
@@ -243,17 +267,22 @@ function extractReasoningText(message: ChatMessage) {
   return parts
     .filter(
       (part) =>
-        typeof part === "object" && part !== null && (part as { type?: unknown }).type === "reasoning"
+        typeof part === "object" &&
+        part !== null &&
+        (part as { type?: unknown }).type === "reasoning"
     )
     .map((part) => String((part as { text?: unknown }).text || ""))
     .join("\n");
 }
 
-function extractTaskPollingMetaFromMessage(message: ChatMessage): TaskPollingMeta | null {
+function extractTaskPollingMetaFromMessage(
+  message: ChatMessage
+): TaskPollingMeta | null {
   const text = extractMessageText(message);
   let latest: TaskPollingMeta | null = null;
+  const taskAuthRegex = new RegExp(TASK_AUTH_PATTERN, "g");
 
-  for (const match of text.matchAll(TASK_AUTH_REGEX)) {
+  for (const match of text.matchAll(taskAuthRegex)) {
     const runId = match[1] || "";
     const cursor = Number.parseInt(match[2] || "", 10);
     const cursorSig = match[3] || "";
@@ -314,7 +343,9 @@ function findLatestAssistantMessageIdInLatestTurn(messages: ChatMessage[]) {
   return "";
 }
 
-function extractTaskPollingMetaFromDataPart(dataPart: unknown): TaskPollingMeta | null {
+function extractTaskPollingMetaFromDataPart(
+  dataPart: unknown
+): TaskPollingMeta | null {
   if (!dataPart || typeof dataPart !== "object") {
     return null;
   }
@@ -324,11 +355,17 @@ function extractTaskPollingMetaFromDataPart(dataPart: unknown): TaskPollingMeta 
     return null;
   }
 
-  const runId = typeof candidate.data.runId === "string" ? candidate.data.runId : "";
+  const runId =
+    typeof candidate.data.runId === "string" ? candidate.data.runId : "";
   const rawCursor = candidate.data.cursor;
   const cursor =
-    typeof rawCursor === "number" ? Math.trunc(rawCursor) : Number.parseInt(String(rawCursor ?? ""), 10);
-  const cursorSig = typeof candidate.data.cursorSig === "string" ? candidate.data.cursorSig : "";
+    typeof rawCursor === "number"
+      ? Math.trunc(rawCursor)
+      : Number.parseInt(String(rawCursor ?? ""), 10);
+  const cursorSig =
+    typeof candidate.data.cursorSig === "string"
+      ? candidate.data.cursorSig
+      : "";
 
   if (!runId || !Number.isFinite(cursor) || cursor < 0 || !cursorSig) {
     return null;
@@ -383,7 +420,9 @@ export function Chat({
   const pollingMessageIdsRef = useRef<Map<string, string>>(new Map());
   const pollingCursorRef = useRef<Map<string, number>>(new Map());
   const pollingCursorSigRef = useRef<Map<string, string>>(new Map());
-  const pollingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const pollingAbortControllersRef = useRef<Map<string, AbortController>>(
+    new Map()
+  );
   const pendingTaskMetaRef = useRef<TaskPollingMeta | null>(null);
   const setMessagesRef = useRef<SetChatMessages | null>(null);
   const hasRecoveredWatchdogRef = useRef(false);
@@ -418,8 +457,7 @@ export function Chat({
           turnstileToken
         )}; Path=/; SameSite=Lax`;
       } else {
-        document.cookie =
-          "turnstile_token=; Path=/; Max-Age=0; SameSite=Lax";
+        document.cookie = "turnstile_token=; Path=/; Max-Age=0; SameSite=Lax";
       }
     }
   }, [turnstileToken]);
@@ -514,6 +552,36 @@ export function Chat({
         );
         if (!response.ok) {
           if (response.status === 403 || response.status === 401) {
+            const updateMessages = setMessagesRef.current;
+            if (updateMessages) {
+              const activeMessageId =
+                pollingMessageIdsRef.current.get(runId) || messageId;
+              updateMessages((current) => {
+                const targetMessageId = current.some(
+                  (msg) => msg.id === activeMessageId
+                )
+                  ? activeMessageId
+                  : findLatestAssistantMessageIdInLatestTurn(current);
+                if (!targetMessageId) {
+                  return current;
+                }
+
+                return current.map((msg) => {
+                  if (msg.id !== targetMessageId) {
+                    return msg;
+                  }
+                  return {
+                    ...msg,
+                    parts: [
+                      {
+                        type: "text" as const,
+                        text: "任务轮询鉴权已失效，请刷新页面后重试。",
+                      },
+                    ],
+                  };
+                });
+              });
+            }
             stopPollingRun(runId);
             return;
           }
@@ -534,7 +602,8 @@ export function Chat({
         pollingCursorRef.current.set(runId, payload.nextCursor);
         pollingCursorSigRef.current.set(runId, payload.nextCursorSig);
 
-        const activeMessageId = pollingMessageIdsRef.current.get(runId) || messageId;
+        const activeMessageId =
+          pollingMessageIdsRef.current.get(runId) || messageId;
         const updateMessages = setMessagesRef.current;
         if (!updateMessages) {
           stopPollingRun(runId);
@@ -545,7 +614,8 @@ export function Chat({
           if (current.some((msg) => msg.id === activeMessageId)) {
             return activeMessageId;
           }
-          const fallbackMessageId = findLatestAssistantMessageIdInLatestTurn(current);
+          const fallbackMessageId =
+            findLatestAssistantMessageIdInLatestTurn(current);
           if (fallbackMessageId) {
             pollingMessageIdsRef.current.set(runId, fallbackMessageId);
             return fallbackMessageId;
@@ -556,8 +626,11 @@ export function Chat({
         const pollEvents = normalizeTaskPollEvents(payload.events);
         if (pollEvents.length === 0) {
           const reasoningDelta =
-            typeof payload.reasoningText === "string" ? payload.reasoningText : "";
-          const textValue = typeof payload.text === "string" ? payload.text : "";
+            typeof payload.reasoningText === "string"
+              ? payload.reasoningText
+              : "";
+          const textValue =
+            typeof payload.text === "string" ? payload.text : "";
           if (reasoningDelta) {
             pollEvents.push({ type: "reasoning-delta", delta: reasoningDelta });
           }
@@ -572,7 +645,9 @@ export function Chat({
             for (const chart of normalizePlotlyCharts(payload.plotlyCharts)) {
               pollEvents.push({ type: "plotly-spec", chart });
             }
-            const artifactItems = normalizeBacktestArtifactItems(payload.artifacts);
+            const artifactItems = normalizeBacktestArtifactItems(
+              payload.artifacts
+            );
             if (artifactItems.length > 0) {
               pollEvents.push({ type: "artifact-items", items: artifactItems });
             }
@@ -632,7 +707,9 @@ export function Chat({
                       {
                         type: "reasoning" as const,
                         text: nextReasoning,
-                        state: payload.isCompleted ? ("done" as const) : ("streaming" as const),
+                        state: payload.isCompleted
+                          ? ("done" as const)
+                          : ("streaming" as const),
                       },
                     ]
                   : []),
@@ -684,7 +761,9 @@ export function Chat({
               }
               return {
                 ...msg,
-                parts: [{ type: "text", text: `任务执行失败：${payload.status}` }],
+                parts: [
+                  { type: "text", text: `任务执行失败：${payload.status}` },
+                ],
               };
             });
           });
@@ -800,7 +879,8 @@ export function Chat({
       }
 
       const taskMeta =
-        extractTaskPollingMetaFromMessage(message as ChatMessage) || pendingTaskMetaRef.current;
+        extractTaskPollingMetaFromMessage(message as ChatMessage) ||
+        pendingTaskMetaRef.current;
       if (!taskMeta) {
         return;
       }
@@ -917,7 +997,14 @@ export function Chat({
       setHasAppendedQuery(true);
       window.history.replaceState({}, "", `/chat/${id}`);
     }
-  }, [query, sendMessage, hasAppendedQuery, id, turnstileSiteKey, turnstileToken]);
+  }, [
+    query,
+    sendMessage,
+    hasAppendedQuery,
+    id,
+    turnstileSiteKey,
+    turnstileToken,
+  ]);
 
   useEffect(() => {
     hasRecoveredWatchdogRef.current = false;
@@ -962,7 +1049,8 @@ export function Chat({
     if (pollingRunIdsRef.current.has(pendingTaskFromData.runId)) {
       return;
     }
-    const latestAssistantMessageId = findLatestAssistantMessageIdInLatestTurn(messages);
+    const latestAssistantMessageId =
+      findLatestAssistantMessageIdInLatestTurn(messages);
     if (!latestAssistantMessageId) {
       return;
     }

@@ -21,7 +21,10 @@ import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { buildArtifactItems } from "@/lib/artifacts";
-import { isProductionEnvironment } from "@/lib/constants";
+import {
+  isProductionEnvironment,
+  TASK_SESSION_COOKIE_NAME,
+} from "@/lib/constants";
 import {
   createStreamId,
   deleteChatById,
@@ -35,7 +38,10 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import { extractPlotlyChartsFromText, normalizePlotlyCharts } from "@/lib/plotly";
+import {
+  extractPlotlyChartsFromText,
+  normalizePlotlyCharts,
+} from "@/lib/plotly";
 import { isRedisConfigured } from "@/lib/redis";
 import {
   getTaskRunMessageId,
@@ -59,8 +65,10 @@ export const maxDuration = 300;
 const DEFAULT_BACKEND = "claude_proxy";
 const FIXED_CHAT_MODEL =
   process.env.CODEX_MODEL || process.env.CLAUDE_CODE_MODEL || "gpt-5.3-codex";
-const USE_TRIGGER_DEV = (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
-const CHAT_API_DEBUG_VERBOSE = (process.env.CHAT_API_DEBUG_VERBOSE || "false").toLowerCase() === "true";
+const USE_TRIGGER_DEV =
+  (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
+const CHAT_API_DEBUG_VERBOSE =
+  (process.env.CHAT_API_DEBUG_VERBOSE || "false").toLowerCase() === "true";
 
 function getStreamContext() {
   try {
@@ -70,12 +78,15 @@ function getStreamContext() {
   }
 }
 
-
 function isQuotaDisabled() {
-  return (process.env.DISABLE_CHAT_DAILY_QUOTA || "false").toLowerCase() === "true";
+  return (
+    (process.env.DISABLE_CHAT_DAILY_QUOTA || "false").toLowerCase() === "true"
+  );
 }
 
-function extractTextFromParts(parts: Array<{ type: string; text?: string }> | undefined) {
+function extractTextFromParts(
+  parts: Array<{ type: string; text?: string }> | undefined
+) {
   if (!parts?.length) {
     return "";
   }
@@ -89,7 +100,9 @@ function extractTextFromParts(parts: Array<{ type: string; text?: string }> | un
 
 function extractLatestUserText(body: PostRequestBody) {
   if (body.message?.role === "user") {
-    return extractTextFromParts(body.message.parts as Array<{ type: string; text?: string }>);
+    return extractTextFromParts(
+      body.message.parts as Array<{ type: string; text?: string }>
+    );
   }
 
   if (Array.isArray(body.messages)) {
@@ -172,7 +185,6 @@ function chatDebug(event: string, payload?: Record<string, unknown>) {
   console.log(`[chat-api][debug] ${event}`);
 }
 
-
 function getCookieValue(cookieHeader: string | null, key: string): string {
   if (!cookieHeader) {
     return "";
@@ -187,6 +199,21 @@ function getCookieValue(cookieHeader: string | null, key: string): string {
   return "";
 }
 
+function buildTaskSessionCookieHeader(taskSessionId: string) {
+  const maxAgeSeconds = 30 * 24 * 60 * 60;
+  const attributes = [
+    `${TASK_SESSION_COOKIE_NAME}=${encodeURIComponent(taskSessionId)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAgeSeconds}`,
+  ];
+  if (isProductionEnvironment) {
+    attributes.push("Secure");
+  }
+  return attributes.join("; ");
+}
+
 type ClaudeProxyPrecheckResult = {
   allowed: boolean;
   reason: string;
@@ -194,7 +221,9 @@ type ClaudeProxyPrecheckResult = {
 };
 
 function parseTurnstileReason(message: string) {
-  const match = String(message || "").match(/Turnstile verification failed:\s*([a-zA-Z0-9_-]+)/i);
+  const match = String(message || "").match(
+    /Turnstile verification failed:\s*([a-zA-Z0-9_-]+)/i
+  );
   if (!match?.[1]) {
     return "";
   }
@@ -256,16 +285,20 @@ async function precheckClaudeProxyInput({
     parsed && typeof parsed.reply === "string" && parsed.reply.trim()
       ? parsed.reply
       : parsed &&
-          typeof (parsed.error as { message?: unknown } | undefined)?.message === "string" &&
+          typeof (parsed.error as { message?: unknown } | undefined)
+            ?.message === "string" &&
           String((parsed.error as { message?: unknown }).message || "").trim()
         ? String((parsed.error as { message?: unknown }).message)
-        : raw || response.statusText || "该请求当前未通过策略校验，请调整后重试。";
+        : raw ||
+          response.statusText ||
+          "该请求当前未通过策略校验，请调整后重试。";
 
   const turnstileReasonFromReason = reason.startsWith("turnstile_")
     ? reason.slice("turnstile_".length)
     : "";
   const turnstileReasonFromMessage = parseTurnstileReason(reply);
-  const turnstileReason = turnstileReasonFromReason || turnstileReasonFromMessage;
+  const turnstileReason =
+    turnstileReasonFromReason || turnstileReasonFromMessage;
   if (turnstileReason) {
     throw new Error(`turnstile_upstream:${turnstileReason}`);
   }
@@ -373,7 +406,9 @@ async function streamFromClaudeProxy({
     buffer = events.pop() || "";
 
     for (const event of events) {
-      const lines = event.split("\n").filter((line) => line.startsWith("data:"));
+      const lines = event
+        .split("\n")
+        .filter((line) => line.startsWith("data:"));
       if (lines.length === 0) {
         continue;
       }
@@ -405,7 +440,9 @@ async function streamFromClaudeProxy({
           ? delta
           : Array.isArray(delta)
             ? delta
-                .map((part) => (typeof part?.text === "string" ? part.text : ""))
+                .map((part) =>
+                  typeof part?.text === "string" ? part.text : ""
+                )
                 .join("")
             : "";
       const normalizedReasoning =
@@ -450,7 +487,9 @@ async function streamFromClaudeProxy({
   if (!textStarted && textBuffer) {
     const textForReply =
       normalizedText.trim() ||
-      (charts.length > 0 ? "已生成交互图表，请在下方图表卡片查看。" : normalizedText);
+      (charts.length > 0
+        ? "已生成交互图表，请在下方图表卡片查看。"
+        : normalizedText);
     dataStream.write({ type: "text-start", id: textId });
     dataStream.write({
       type: "text-delta",
@@ -479,20 +518,22 @@ export async function POST(request: Request) {
   try {
     const json = await request.json();
     rawRequestBody =
-      json && typeof json === "object" ? (json as Record<string, unknown>) : null;
+      json && typeof json === "object"
+        ? (json as Record<string, unknown>)
+        : null;
     requestBody = postRequestBodySchema.parse(json);
   } catch (_) {
     return new ChatSDKError("bad_request:api").toResponse();
   }
 
   try {
-    const {
-      id,
-      message,
-      messages,
-      selectedChatModel,
-      selectedVisibilityType,
-    } = requestBody;
+    const { id, message, messages, selectedChatModel, selectedVisibilityType } =
+      requestBody;
+    const existingTaskSessionId = readTaskSessionIdFromCookieHeader(
+      request.headers.get("cookie")
+    );
+    const taskSessionId = existingTaskSessionId || generateId();
+    const shouldSetTaskSessionCookie = !existingTaskSessionId;
     chatDebug("post_received", {
       chatId: id,
       hasSingleMessage: Boolean(message),
@@ -585,7 +626,8 @@ export async function POST(request: Request) {
       "";
     console.log(
       `[chat-api] turnstile header=${Boolean(
-        request.headers.get("x-turnstile-token") || request.headers.get("cf-turnstile-response")
+        request.headers.get("x-turnstile-token") ||
+          request.headers.get("cf-turnstile-response")
       )} body=${Boolean(turnstileTokenFromBody)} cookie=${Boolean(turnstileTokenFromCookie)}`
     );
     chatDebug("backend_selected", {
@@ -766,12 +808,6 @@ export async function POST(request: Request) {
             }
           );
           const runId = handle.id;
-          const taskSessionId = readTaskSessionIdFromCookieHeader(
-            request.headers.get("cookie")
-          );
-          if (!taskSessionId) {
-            throw new Error("task_session_missing");
-          }
           const taskSessionHash = hashTaskSessionId(taskSessionId);
           const taskOwnerTtlSeconds = getTaskOwnerTtlSeconds();
           const initialCursor = 0;
@@ -824,7 +860,11 @@ export async function POST(request: Request) {
             },
           });
           dataStream.write({ type: "text-start", id: taskInfoTextId });
-          dataStream.write({ type: "text-delta", id: taskInfoTextId, delta: taskInfo });
+          dataStream.write({
+            type: "text-delta",
+            id: taskInfoTextId,
+            delta: taskInfo,
+          });
 
           const closeTaskInfoText = () => {
             if (taskInfoClosed) {
@@ -868,8 +908,14 @@ export async function POST(request: Request) {
               "EXPIRED",
             ]);
 
-            const isRecord = (value: unknown): value is Record<string, unknown> => {
-              return typeof value === "object" && value !== null && !Array.isArray(value);
+            const isRecord = (
+              value: unknown
+            ): value is Record<string, unknown> => {
+              return (
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value)
+              );
             };
 
             const toArtifactList = (value: unknown) => {
@@ -888,17 +934,27 @@ export async function POST(request: Request) {
                   const parsed = JSON.parse(raw) as unknown;
                   return normalizeOutput(parsed as RawTaskOutput);
                 } catch {
-                  return { text: raw, artifacts: [] as string[], plotlyCharts: [] as unknown[] };
+                  return {
+                    text: raw,
+                    artifacts: [] as string[],
+                    plotlyCharts: [] as unknown[],
+                  };
                 }
               }
 
               if (!isRecord(raw)) {
-                return { text: "", artifacts: [] as string[], plotlyCharts: [] as unknown[] };
+                return {
+                  text: "",
+                  artifacts: [] as string[],
+                  plotlyCharts: [] as unknown[],
+                };
               }
 
               const text = typeof raw.text === "string" ? raw.text : "";
               const artifacts = toArtifactList(raw.artifacts);
-              const plotlyCharts = Array.isArray(raw.plotlyCharts) ? raw.plotlyCharts : [];
+              const plotlyCharts = Array.isArray(raw.plotlyCharts)
+                ? raw.plotlyCharts
+                : [];
 
               if (text) {
                 return { text, artifacts, plotlyCharts };
@@ -920,24 +976,24 @@ export async function POST(request: Request) {
               if (!pendingMessageId) {
                 const marker = `[[task:${runId}]]`;
                 const messages = await getMessagesByChatId({ id });
-                const pendingMessage = [...messages]
-                  .reverse()
-                  .find((item) => {
-                    if (item.role !== "assistant") {
-                      return false;
-                    }
-                    const parts = Array.isArray(item.parts) ? item.parts : [];
-                    const text = parts
-                      .filter(
-                        (part) =>
-                          typeof part === "object" &&
-                          part !== null &&
-                          (part as { type?: unknown }).type === "text"
-                      )
-                      .map((part) => String((part as { text?: unknown }).text || ""))
-                      .join("\n");
-                    return text.includes(marker);
-                  });
+                const pendingMessage = [...messages].reverse().find((item) => {
+                  if (item.role !== "assistant") {
+                    return false;
+                  }
+                  const parts = Array.isArray(item.parts) ? item.parts : [];
+                  const text = parts
+                    .filter(
+                      (part) =>
+                        typeof part === "object" &&
+                        part !== null &&
+                        (part as { type?: unknown }).type === "text"
+                    )
+                    .map((part) =>
+                      String((part as { text?: unknown }).text || "")
+                    )
+                    .join("\n");
+                  return text.includes(marker);
+                });
                 pendingMessageId = pendingMessage?.id || null;
               }
 
@@ -949,15 +1005,25 @@ export async function POST(request: Request) {
                 if (failureStatuses.has(run.status)) {
                   await updateMessage({
                     id: pendingMessageId,
-                    parts: [{ type: "text", text: `任务执行失败：${run.status}`, state: "done" }],
+                    parts: [
+                      {
+                        type: "text",
+                        text: `任务执行失败：${run.status}`,
+                        state: "done",
+                      },
+                    ],
                   });
                 }
                 return;
               }
 
               let output = run.output as RawTaskOutput;
-              if (!output && (run as { outputPresignedUrl?: string }).outputPresignedUrl) {
-                const presigned = (run as { outputPresignedUrl?: string }).outputPresignedUrl;
+              if (
+                !output &&
+                (run as { outputPresignedUrl?: string }).outputPresignedUrl
+              ) {
+                const presigned = (run as { outputPresignedUrl?: string })
+                  .outputPresignedUrl;
                 if (presigned) {
                   try {
                     const fetched = await fetch(presigned);
@@ -976,10 +1042,11 @@ export async function POST(request: Request) {
                 normalized.plotlyCharts,
                 `task-${runId}-explicit`
               );
-              const {
-                text: strippedText,
-                charts: chartsFromText,
-              } = extractPlotlyChartsFromText(normalized.text, `task-${runId}-text`);
+              const { text: strippedText, charts: chartsFromText } =
+                extractPlotlyChartsFromText(
+                  normalized.text,
+                  `task-${runId}-text`
+                );
               const plotlyCharts = [...chartsFromOutput, ...chartsFromText];
               const finalText =
                 strippedText.trim() ||
@@ -1015,7 +1082,10 @@ export async function POST(request: Request) {
                 parts: completedParts,
               });
             } catch (persistError) {
-              console.error(`[chat-api] Failed to finalize Trigger run ${runId}:`, persistError);
+              console.error(
+                `[chat-api] Failed to finalize Trigger run ${runId}:`,
+                persistError
+              );
             }
           });
 
@@ -1047,13 +1117,20 @@ export async function POST(request: Request) {
       },
       generateId: generateUUID,
       onFinish: async ({ messages: finishedMessages }) => {
-        const existingMessageIds = new Set(uiMessages.map((message) => message.id));
+        const existingMessageIds = new Set(
+          uiMessages.map((message) => message.id)
+        );
         let hasPersistedAssistantMessage = false;
         const skipFinishedAssistantPersistence =
-          backend !== "gateway" && USE_TRIGGER_DEV && triggerAssistantPersistedInExecute;
+          backend !== "gateway" &&
+          USE_TRIGGER_DEV &&
+          triggerAssistantPersistedInExecute;
 
         for (const finishedMsg of finishedMessages) {
-          if (skipFinishedAssistantPersistence && finishedMsg.role === "assistant") {
+          if (
+            skipFinishedAssistantPersistence &&
+            finishedMsg.role === "assistant"
+          ) {
             hasPersistedAssistantMessage = true;
             continue;
           }
@@ -1133,7 +1210,7 @@ export async function POST(request: Request) {
       },
     });
 
-    return createUIMessageStreamResponse({
+    const response = createUIMessageStreamResponse({
       stream,
       async consumeSseStream({ stream: sseStream }) {
         if (!isRedisConfigured()) {
@@ -1144,29 +1221,28 @@ export async function POST(request: Request) {
           if (streamContext) {
             const streamId = generateId();
             await createStreamId({ streamId, chatId: id });
-            await streamContext.createNewResumableStream(streamId, () => sseStream);
+            await streamContext.createNewResumableStream(
+              streamId,
+              () => sseStream
+            );
           }
         } catch (_) {
           // ignore redis errors
         }
       },
     });
+    if (shouldSetTaskSessionCookie) {
+      response.headers.append(
+        "set-cookie",
+        buildTaskSessionCookieHeader(taskSessionId)
+      );
+    }
+    return response;
   } catch (error) {
     const vercelId = request.headers.get("x-vercel-id");
 
     if (error instanceof ChatSDKError) {
       return error.toResponse();
-    }
-
-    if (error instanceof Error && error.message === "task_session_missing") {
-      return Response.json(
-        {
-          code: "forbidden:chat",
-          message: "Task session is invalid. Please refresh and try again.",
-          cause: "task_session_missing",
-        },
-        { status: 403 }
-      );
     }
 
     if (
