@@ -6,6 +6,8 @@ import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
+import type { PlotlyChartPayload } from "./plotly";
+export type { PlotlyChartPayload } from "./plotly";
 
 export type DataPart = { type: "append-message"; message: string };
 
@@ -56,6 +58,9 @@ export type CustomUIDataTypes = {
   };
   "backtest-artifact": {
     items: BacktestArtifactItem[];
+  };
+  "plotly-chart": {
+    chart: PlotlyChartPayload;
   };
 };
 

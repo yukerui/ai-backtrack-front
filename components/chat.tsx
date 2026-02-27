@@ -22,7 +22,12 @@ import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import type { Attachment, BacktestArtifactItem, ChatMessage } from "@/lib/types";
+import type {
+  Attachment,
+  BacktestArtifactItem,
+  ChatMessage,
+  PlotlyChartPayload,
+} from "@/lib/types";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import { Artifact } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
@@ -45,6 +50,7 @@ type TaskStatusResponse = {
   reasoningText?: string;
   text?: string;
   artifacts?: BacktestArtifactItem[];
+  plotlyCharts?: PlotlyChartPayload[];
 };
 
 type TaskPollingMeta = {
@@ -90,6 +96,46 @@ function normalizeBacktestArtifactItems(value: unknown): BacktestArtifactItem[] 
       continue;
     }
     normalized.push({ path, url, title, kind });
+  }
+  return normalized;
+}
+
+function normalizePlotlyCharts(value: unknown): PlotlyChartPayload[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const normalized: PlotlyChartPayload[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const candidate = entry as Partial<PlotlyChartPayload>;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const data = Array.isArray(candidate.data) ? candidate.data : [];
+    if (!id || !data.length) {
+      continue;
+    }
+    const chart: PlotlyChartPayload = {
+      id,
+      data: data
+        .filter(
+          (item: unknown) => typeof item === "object" && item !== null && !Array.isArray(item)
+        )
+        .map((item: unknown) => ({ ...(item as Record<string, unknown>) })),
+      ...(typeof candidate.title === "string" && candidate.title.trim()
+        ? { title: candidate.title.trim() }
+        : {}),
+      ...(candidate.layout && typeof candidate.layout === "object" && !Array.isArray(candidate.layout)
+        ? { layout: { ...(candidate.layout as Record<string, unknown>) } }
+        : {}),
+      ...(candidate.config && typeof candidate.config === "object" && !Array.isArray(candidate.config)
+        ? { config: { ...(candidate.config as Record<string, unknown>) } }
+        : {}),
+    };
+    if (!chart.data.length) {
+      continue;
+    }
+    normalized.push(chart);
   }
   return normalized;
 }
@@ -468,6 +514,7 @@ export function Chat({
         const completedTextValue = typeof payload.text === "string" ? payload.text : "";
         if (payload.isCompleted) {
           const artifactItems = normalizeBacktestArtifactItems(payload.artifacts);
+          const plotlyCharts = normalizePlotlyCharts(payload.plotlyCharts);
           updateMessages((current) => {
             const targetMessageId = resolveTargetMessageId(current);
             if (!targetMessageId) {
@@ -506,6 +553,10 @@ export function Chat({
                       },
                     ]
                   : []),
+                ...plotlyCharts.map((chart) => ({
+                  type: "data-plotly-chart" as const,
+                  data: { chart },
+                })),
               ] as ChatMessage["parts"];
               return {
                 ...msg,

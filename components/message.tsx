@@ -2,9 +2,14 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useState } from "react";
 import type { Vote } from "@/lib/db/schema";
-import type { BacktestArtifactItem, ChatMessage } from "@/lib/types";
+import type {
+  BacktestArtifactItem,
+  ChatMessage,
+  PlotlyChartPayload,
+} from "@/lib/types";
 import { cn, linkifyUrlsAsMarkdown, sanitizeText } from "@/lib/utils";
 import { BacktestArtifactCard } from "./backtest-artifact-card";
+import { PlotlyChartCard } from "./plotly-chart-card";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
@@ -50,6 +55,41 @@ function normalizeBacktestArtifactItems(value: unknown): BacktestArtifactItem[] 
     normalized.push({ path, url, title, kind });
   }
   return normalized;
+}
+
+function normalizePlotlyChart(value: unknown): PlotlyChartPayload | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<PlotlyChartPayload>;
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  const data = Array.isArray(candidate.data) ? candidate.data : [];
+  if (!id || !data.length) {
+    return null;
+  }
+
+  const normalizedData = data
+    .filter(
+      (entry: unknown) => entry !== null && typeof entry === "object" && !Array.isArray(entry)
+    )
+    .map((entry: unknown) => ({ ...(entry as Record<string, unknown>) }));
+  if (!normalizedData.length) {
+    return null;
+  }
+
+  return {
+    id,
+    data: normalizedData,
+    ...(typeof candidate.title === "string" && candidate.title.trim()
+      ? { title: candidate.title.trim() }
+      : {}),
+    ...(candidate.layout && typeof candidate.layout === "object" && !Array.isArray(candidate.layout)
+      ? { layout: { ...(candidate.layout as Record<string, unknown>) } }
+      : {}),
+    ...(candidate.config && typeof candidate.config === "object" && !Array.isArray(candidate.config)
+      ? { config: { ...(candidate.config as Record<string, unknown>) } }
+      : {}),
+  };
 }
 
 const PurePreviewMessage = ({
@@ -104,7 +144,8 @@ const PurePreviewMessage = ({
             "gap-2 md:gap-4": message.parts?.some(
               (p) =>
                 (p.type === "text" && p.text?.trim()) ||
-                p.type === "data-backtest-artifact"
+                p.type === "data-backtest-artifact" ||
+                p.type === "data-plotly-chart"
             ),
             "w-full":
               (message.role === "assistant" &&
@@ -112,7 +153,8 @@ const PurePreviewMessage = ({
                   (p) => p.type === "text" && p.text?.trim()
                 ) ||
                   message.parts?.some((p) => p.type.startsWith("tool-")) ||
-                  message.parts?.some((p) => p.type === "data-backtest-artifact"))) ||
+                  message.parts?.some((p) => p.type === "data-backtest-artifact") ||
+                  message.parts?.some((p) => p.type === "data-plotly-chart"))) ||
               mode === "edit",
             "max-w-[calc(100%-2.5rem)] sm:max-w-[min(fit-content,80%)]":
               message.role === "user" && mode !== "edit",
@@ -207,6 +249,16 @@ const PurePreviewMessage = ({
                 return null;
               }
               return <BacktestArtifactCard items={items} key={key} />;
+            }
+
+            if (type === "data-plotly-chart") {
+              const chart = normalizePlotlyChart(
+                (part as { data?: { chart?: unknown } }).data?.chart
+              );
+              if (!chart) {
+                return null;
+              }
+              return <PlotlyChartCard chart={chart} key={key} />;
             }
 
             if (type === "tool-getWeather") {

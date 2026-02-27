@@ -9,6 +9,7 @@ import {
 } from "@/trigger/streams";
 import { buildArtifactItems } from "@/lib/artifacts";
 import { getMessagesByChatId, updateMessage } from "@/lib/db/queries";
+import { extractPlotlyChartsFromText, normalizePlotlyCharts } from "@/lib/plotly";
 import {
   compareAndSwapTaskCursorState,
   getTaskCursorState,
@@ -26,6 +27,7 @@ type RawTaskOutput =
   | {
       text?: unknown;
       artifacts?: unknown;
+      plotlyCharts?: unknown;
       [key: string]: unknown;
     }
   | null
@@ -60,25 +62,27 @@ function normalizeOutput(raw: RawTaskOutput) {
       const parsed = JSON.parse(raw) as unknown;
       return normalizeOutput(parsed as RawTaskOutput);
     } catch {
-      return { text: raw, artifacts: [] as string[] };
+      return { text: raw, artifacts: [] as string[], plotlyCharts: [] as unknown[] };
     }
   }
 
   if (!isRecord(raw)) {
-    return { text: "", artifacts: [] as string[] };
+    return { text: "", artifacts: [] as string[], plotlyCharts: [] as unknown[] };
   }
 
   const text = typeof raw.text === "string" ? raw.text : "";
   const artifacts = toArtifactList(raw.artifacts);
+  const plotlyCharts = Array.isArray(raw.plotlyCharts) ? raw.plotlyCharts : [];
 
   if (text) {
-    return { text, artifacts };
+    return { text, artifacts, plotlyCharts };
   }
 
   // Fallback: render object as JSON so frontend still has something visible.
   return {
     text: `\`\`\`json\n${JSON.stringify(raw, null, 2)}\n\`\`\``,
     artifacts,
+    plotlyCharts,
   };
 }
 
@@ -244,9 +248,22 @@ export async function GET(
 
   const normalized = normalizeOutput(output);
   const artifactItems = buildArtifactItems(normalized.artifacts);
+  const chartsFromOutput = normalizePlotlyCharts(
+    normalized.plotlyCharts,
+    `task-${runId}-explicit`
+  );
+  const {
+    text: strippedText,
+    charts: chartsFromText,
+  } = extractPlotlyChartsFromText(normalized.text, `task-${runId}-text`);
+  const plotlyCharts = [...chartsFromOutput, ...chartsFromText];
   const finalText =
-    normalized.text.trim() ||
-    (artifactItems.length > 0 ? "已生成回测结果，请点击下方卡片查看。" : normalized.text);
+    strippedText.trim() ||
+    (plotlyCharts.length > 0
+      ? "已生成交互图表，请在下方图表卡片查看。"
+      : artifactItems.length > 0
+        ? "已生成回测结果，请点击下方卡片查看。"
+        : strippedText);
   const chatId = (run.payload as { chatId?: string } | null)?.chatId;
 
   if (chatId) {
@@ -283,6 +300,10 @@ export async function GET(
             text: finalText,
             state: "done",
           },
+          ...plotlyCharts.map((chart) => ({
+            type: "data-plotly-chart",
+            data: { chart },
+          })),
           ...(artifactItems.length > 0
             ? [
                 {
@@ -312,5 +333,6 @@ export async function GET(
     reasoningText: realtimeSnapshot.reasoningText,
     text: finalText,
     artifacts: artifactItems,
+    plotlyCharts,
   });
 }
