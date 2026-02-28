@@ -527,7 +527,7 @@ export const ThinkingMessage = () => {
         </div>
 
         <div className="flex w-full flex-col gap-2 md:gap-4">
-          <div className="flex items-center gap-1 p-0 text-muted-foreground text-sm">
+          <div className="flex items-center gap-1 p-0 text-base text-muted-foreground">
             <span className="thinking-shimmer">正在思考</span>
           </div>
         </div>

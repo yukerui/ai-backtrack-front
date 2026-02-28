@@ -773,6 +773,7 @@ export function Chat({
               }
               let artifactItems = extractExistingArtifactItems(msg);
               let thinkingActivity = extractExistingThinkingActivity(msg);
+              let sawThinkingActivityEvent = false;
 
               for (const event of pollEvents) {
                 if (event.type === "reasoning-delta") {
@@ -780,6 +781,7 @@ export function Chat({
                   continue;
                 }
                 if (event.type === "thinking-activity") {
+                  sawThinkingActivityEvent = true;
                   thinkingActivity = event.activity;
                   continue;
                 }
@@ -798,6 +800,10 @@ export function Chat({
                 if (event.type === "artifact-items") {
                   artifactItems = event.items;
                 }
+              }
+
+              if (payload.isCompleted && !sawThinkingActivityEvent) {
+                thinkingActivity = null;
               }
 
               const chartParts = [...chartById.values()].map((chart) => ({

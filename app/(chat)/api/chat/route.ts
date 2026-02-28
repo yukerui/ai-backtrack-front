@@ -907,6 +907,7 @@ export async function POST(request: Request) {
           });
           const taskInfo = "任务已提交，后台处理中。稍后会自动更新";
           const taskInfoTextId = generateUUID();
+          const taskInfoReasoningId = generateUUID();
           let taskInfoClosed = false;
           triggerAssistantTextForPersistence = taskInfo;
           await persistTriggerAssistantSnapshot(
@@ -934,6 +935,19 @@ export async function POST(request: Request) {
             type: "text-delta",
             id: taskInfoTextId,
             delta: taskInfo,
+          });
+          dataStream.write({
+            type: "reasoning-start",
+            id: taskInfoReasoningId,
+          });
+          dataStream.write({
+            type: "data-thinking-activity",
+            data: {
+              reasoningId: taskInfoReasoningId,
+              kind: "thinking",
+              label: "正在思考",
+              active: true,
+            },
           });
 
           const closeTaskInfoText = () => {
