@@ -552,6 +552,29 @@ export function Chat({
         );
         if (!response.ok) {
           if (response.status === 403 || response.status === 401) {
+            let forbiddenCause = "";
+            try {
+              const errorPayload = (await response.json()) as { cause?: unknown };
+              if (typeof errorPayload.cause === "string") {
+                forbiddenCause = errorPayload.cause.trim();
+              }
+            } catch {
+              // ignore malformed error payloads
+            }
+
+            const isRecoverableCursorIssue =
+              response.status === 403 &&
+              (forbiddenCause === "stale_cursor_state" ||
+                forbiddenCause === "cursor_advance_conflict" ||
+                forbiddenCause === "invalid_cursor_sig");
+            if (isRecoverableCursorIssue) {
+              stopPollingRun(runId);
+              refetchMessages().catch(() => {
+                // ignore transient refresh failures
+              });
+              return;
+            }
+
             const updateMessages = setMessagesRef.current;
             if (updateMessages) {
               const activeMessageId =
@@ -575,7 +598,11 @@ export function Chat({
                     parts: [
                       {
                         type: "text" as const,
-                        text: "任务轮询鉴权已失效，请刷新页面后重试。",
+                        text:
+                          forbiddenCause === "missing_task_session" ||
+                          forbiddenCause === "task_session_mismatch"
+                            ? "任务会话已失效，请刷新页面后重试。"
+                            : "任务轮询鉴权已失效，请刷新页面后重试。",
                       },
                     ],
                   };
