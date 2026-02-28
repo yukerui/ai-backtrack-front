@@ -127,7 +127,7 @@ export function MessageReasoning({
   const normalizedReasoning = normalizeReasoningText(reasoning);
   const statusLabel = isLoading
     ? detectStreamingStatus(normalizedReasoning, activity, reasoningId)
-    : "正在思考";
+    : undefined;
 
   return (
     <Reasoning

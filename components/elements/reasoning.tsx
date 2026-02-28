@@ -109,8 +109,9 @@ export const ReasoningTrigger = memo(
     showStreamingCursor?: boolean;
   }) => {
     const { isStreaming, isOpen, duration } = useReasoning();
+    const elapsedSeconds = Math.max(duration, 1);
     const label =
-      statusLabel ?? (isStreaming || duration === 0 ? "思考中" : `${duration}s`);
+      statusLabel ?? (isStreaming ? "正在思考" : `思考了 ${elapsedSeconds} s`);
 
     return (
       <CollapsibleTrigger
