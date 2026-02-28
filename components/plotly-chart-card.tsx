@@ -21,13 +21,15 @@ const Plot = dynamic(async () => {
 
 function normalizeLayout(chart: PlotlyChartPayload) {
   const layout = chart.layout && typeof chart.layout === "object" ? chart.layout : {};
-  return {
+  const normalizedLayout = {
     autosize: true,
     hovermode: "x unified",
     margin: { l: 48, r: 20, t: 48, b: 48 },
     ...layout,
-    ...(chart.title ? { title: { text: chart.title, x: 0 } } : {}),
   } as Record<string, unknown>;
+  // Keep title only in card header; hide Plotly's in-canvas title.
+  delete normalizedLayout.title;
+  return normalizedLayout;
 }
 
 function normalizeConfig(chart: PlotlyChartPayload) {
