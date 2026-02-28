@@ -259,6 +259,19 @@
   @apply min-w-3;
 }
 
+@keyframes thinking-caret-slide {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(18px);
+  }
+}
+
+.animate-thinking-caret-slide {
+  animation: thinking-caret-slide 1.1s linear infinite;
+}
+
 .cm-lineNumbers .cm-activeLineGutter {
   @apply rounded-l-sm!;
 }
