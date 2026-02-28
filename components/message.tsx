@@ -238,7 +238,9 @@ const PurePreviewMessage = ({
                       .find((activity) => activity.reasoningId === reasoningId) ||
                     latestThinkingActivity
                   : latestThinkingActivity;
-              if (hasContent || isStreaming) {
+              const shouldShowReasoning =
+                hasContent || isStreaming || Boolean(activityForReasoning);
+              if (shouldShowReasoning) {
                 return (
                   <MessageReasoning
                     activity={activityForReasoning}

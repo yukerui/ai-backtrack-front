@@ -803,7 +803,14 @@ export function Chat({
               }
 
               if (payload.isCompleted && !sawThinkingActivityEvent) {
-                thinkingActivity = null;
+                thinkingActivity = thinkingActivity
+                  ? { ...thinkingActivity, active: false, label: "已思考" }
+                  : {
+                      reasoningId: `thinking-${runId}`,
+                      kind: "thinking",
+                      label: "已思考",
+                      active: false,
+                    };
               }
 
               const chartParts = [...chartById.values()].map((chart) => ({
@@ -812,11 +819,11 @@ export function Chat({
               }));
 
               const nextParts = [
-                ...(nextReasoning
+                ...(nextReasoning || thinkingActivity
                   ? [
                       {
                         type: "reasoning" as const,
-                        text: nextReasoning,
+                        text: nextReasoning || " ",
                         state: payload.isCompleted
                           ? ("done" as const)
                           : ("streaming" as const),

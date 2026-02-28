@@ -20,6 +20,24 @@ type MessagesProps = {
   selectedModelId: string;
 };
 
+function hasAssistantMessageInLatestTurn(messages: ChatMessage[]) {
+  let latestUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === "user") {
+      latestUserIndex = i;
+      break;
+    }
+  }
+
+  const startIndex = latestUserIndex >= 0 ? latestUserIndex + 1 : 0;
+  for (let i = startIndex; i < messages.length; i += 1) {
+    if (messages[i]?.role === "assistant") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function PureMessages({
   addToolApprovalResponse,
   chatId,
@@ -42,6 +60,7 @@ function PureMessages({
   });
 
   useDataStream();
+  const hasAssistantInLatestTurn = hasAssistantMessageInLatestTurn(messages);
 
   return (
     <div className="relative flex-1">
@@ -76,6 +95,7 @@ function PureMessages({
           ))}
 
           {status === "submitted" &&
+            !hasAssistantInLatestTurn &&
             !messages.some((msg) =>
               msg.parts?.some(
                 (part) => "state" in part && part.state === "approval-responded"

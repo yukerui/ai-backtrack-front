@@ -930,12 +930,6 @@ export async function POST(request: Request) {
               cursorSig: initialCursorSig,
             },
           });
-          dataStream.write({ type: "text-start", id: taskInfoTextId });
-          dataStream.write({
-            type: "text-delta",
-            id: taskInfoTextId,
-            delta: taskInfo,
-          });
           dataStream.write({
             type: "reasoning-start",
             id: taskInfoReasoningId,
@@ -948,6 +942,12 @@ export async function POST(request: Request) {
               label: "正在思考",
               active: true,
             },
+          });
+          dataStream.write({ type: "text-start", id: taskInfoTextId });
+          dataStream.write({
+            type: "text-delta",
+            id: taskInfoTextId,
+            delta: taskInfo,
           });
 
           const closeTaskInfoText = () => {
