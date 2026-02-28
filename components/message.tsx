@@ -6,6 +6,7 @@ import type {
   BacktestArtifactItem,
   ChatMessage,
   PlotlyChartPayload,
+  ThinkingActivityPayload,
 } from "@/lib/types";
 import { cn, linkifyUrlsAsMarkdown, sanitizeText } from "@/lib/utils";
 import { BacktestArtifactCard } from "./backtest-artifact-card";
@@ -92,6 +93,33 @@ function normalizePlotlyChart(value: unknown): PlotlyChartPayload | null {
   };
 }
 
+function normalizeThinkingActivity(value: unknown): ThinkingActivityPayload | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<ThinkingActivityPayload>;
+  const reasoningId =
+    typeof candidate.reasoningId === "string" ? candidate.reasoningId.trim() : "";
+  const kind = typeof candidate.kind === "string" ? candidate.kind.trim() : "";
+  const label =
+    typeof candidate.label === "string" ? candidate.label.trim() : "";
+  if (!reasoningId || !kind || !label) {
+    return null;
+  }
+  return {
+    reasoningId,
+    kind,
+    label,
+    active: candidate.active === true,
+    ...(typeof candidate.eventType === "string" && candidate.eventType.trim()
+      ? { eventType: candidate.eventType.trim() }
+      : {}),
+    ...(typeof candidate.itemType === "string" && candidate.itemType.trim()
+      ? { itemType: candidate.itemType.trim() }
+      : {}),
+  };
+}
+
 const PurePreviewMessage = ({
   addToolApprovalResponse,
   chatId,
@@ -118,6 +146,18 @@ const PurePreviewMessage = ({
   const attachmentsFromMessage = message.parts.filter(
     (part) => part.type === "file"
   );
+  const thinkingActivities = message.parts
+    .filter((part) => part.type === "data-thinking-activity")
+    .map((part) =>
+      normalizeThinkingActivity(
+        (part as { data?: unknown }).data
+      )
+    )
+    .filter((activity): activity is ThinkingActivityPayload => Boolean(activity));
+  const latestThinkingActivity =
+    thinkingActivities.length > 0
+      ? thinkingActivities[thinkingActivities.length - 1]
+      : null;
 
   useDataStream();
 
@@ -185,12 +225,27 @@ const PurePreviewMessage = ({
             if (type === "reasoning") {
               const hasContent = part.text?.trim().length > 0;
               const isStreaming = "state" in part && part.state === "streaming";
+              const reasoningIdCandidate = (part as { id?: unknown }).id;
+              const reasoningId =
+                typeof reasoningIdCandidate === "string"
+                  ? reasoningIdCandidate
+                  : "";
+              const activityForReasoning =
+                reasoningId
+                  ? thinkingActivities
+                      .slice()
+                      .reverse()
+                      .find((activity) => activity.reasoningId === reasoningId) ||
+                    latestThinkingActivity
+                  : latestThinkingActivity;
               if (hasContent || isStreaming) {
                 return (
                   <MessageReasoning
+                    activity={activityForReasoning}
                     isLoading={isLoading || isStreaming}
                     key={key}
                     reasoning={part.text || ""}
+                    reasoningId={reasoningId}
                   />
                 );
               }
@@ -473,12 +528,11 @@ export const ThinkingMessage = () => {
 
         <div className="flex w-full flex-col gap-2 md:gap-4">
           <div className="flex items-center gap-1 p-0 text-muted-foreground text-sm">
-            <span className="animate-pulse">Thinking</span>
-            <span className="inline-flex">
-              <span className="animate-bounce [animation-delay:0ms]">.</span>
-              <span className="animate-bounce [animation-delay:150ms]">.</span>
-              <span className="animate-bounce [animation-delay:300ms]">.</span>
-            </span>
+            <span>正在思考</span>
+            <span
+              aria-hidden
+              className="h-3 w-[2px] animate-pulse rounded-full bg-current/70"
+            />
           </div>
         </div>
       </div>

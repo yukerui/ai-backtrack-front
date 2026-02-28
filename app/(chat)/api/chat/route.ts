@@ -53,7 +53,7 @@ import {
   saveTaskRunOwner,
   signTaskCursor,
 } from "@/lib/task-security";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatMessage, ThinkingActivityPayload } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
 import { generateTitleFromUserMessage } from "../../actions";
@@ -228,6 +228,50 @@ function parseTurnstileReason(message: string) {
     return "";
   }
   return match[1].toLowerCase();
+}
+
+function normalizeThinkingActivityDelta(
+  value: unknown,
+  reasoningId: string
+): ThinkingActivityPayload | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as {
+    kind?: unknown;
+    label?: unknown;
+    active?: unknown;
+    eventType?: unknown;
+    itemType?: unknown;
+  };
+  const kind =
+    typeof candidate.kind === "string" && candidate.kind.trim()
+      ? candidate.kind.trim()
+      : "thinking";
+  const label =
+    typeof candidate.label === "string" && candidate.label.trim()
+      ? candidate.label.trim()
+      : "正在思考";
+  const active =
+    typeof candidate.active === "boolean" ? candidate.active : Boolean(candidate.active);
+  const eventType =
+    typeof candidate.eventType === "string" && candidate.eventType.trim()
+      ? candidate.eventType.trim()
+      : undefined;
+  const itemType =
+    typeof candidate.itemType === "string" && candidate.itemType.trim()
+      ? candidate.itemType.trim()
+      : undefined;
+
+  return {
+    reasoningId,
+    kind,
+    label,
+    active,
+    ...(eventType ? { eventType } : {}),
+    ...(itemType ? { itemType } : {}),
+  };
 }
 
 async function precheckClaudeProxyInput({
@@ -423,6 +467,7 @@ async function streamFromClaudeProxy({
           delta?: {
             content?: string | Array<{ text?: string }>;
             reasoning?: string;
+            activity?: unknown;
           };
         }>;
       } | null = null;
@@ -435,6 +480,7 @@ async function streamFromClaudeProxy({
 
       const delta = parsed?.choices?.[0]?.delta?.content;
       const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning;
+      const activityDeltaRaw = parsed?.choices?.[0]?.delta?.activity;
       const textDelta =
         typeof delta === "string"
           ? delta
@@ -447,6 +493,21 @@ async function streamFromClaudeProxy({
             : "";
       const normalizedReasoning =
         typeof reasoningDelta === "string" ? reasoningDelta : "";
+      const normalizedActivity = normalizeThinkingActivityDelta(
+        activityDeltaRaw,
+        reasoningId
+      );
+
+      if (normalizedActivity) {
+        if (!reasoningStarted) {
+          dataStream.write({ type: "reasoning-start", id: reasoningId });
+          reasoningStarted = true;
+        }
+        dataStream.write({
+          type: "data-thinking-activity",
+          data: normalizedActivity,
+        });
+      }
 
       if (normalizedReasoning) {
         if (!reasoningStarted) {
@@ -476,6 +537,15 @@ async function streamFromClaudeProxy({
   }
 
   if (reasoningStarted) {
+    dataStream.write({
+      type: "data-thinking-activity",
+      data: {
+        reasoningId,
+        kind: "thinking",
+        label: "正在思考",
+        active: false,
+      },
+    });
     dataStream.write({ type: "reasoning-end", id: reasoningId });
   }
 

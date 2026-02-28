@@ -18,6 +18,15 @@ export type BacktestArtifactItem = {
   title: string;
 };
 
+export type ThinkingActivityPayload = {
+  reasoningId: string;
+  kind: string;
+  label: string;
+  active: boolean;
+  eventType?: string;
+  itemType?: string;
+};
+
 export const messageMetadataSchema = z.object({
   createdAt: z.string(),
 });
@@ -62,6 +71,7 @@ export type CustomUIDataTypes = {
   "plotly-chart": {
     chart: PlotlyChartPayload;
   };
+  "thinking-activity": ThinkingActivityPayload;
 };
 
 export type ChatMessage = UIMessage<
