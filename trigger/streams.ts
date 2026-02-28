@@ -4,6 +4,17 @@ export type FundChatRealtimeChunk =
   | { type: "reasoning-start"; id: string }
   | { type: "reasoning-delta"; id: string; delta: string }
   | { type: "reasoning-end"; id: string }
+  | {
+      type: "thinking-activity";
+      id: string;
+      activity: {
+        kind: string;
+        label: string;
+        active: boolean;
+        eventType?: string;
+        itemType?: string;
+      };
+    }
   | { type: "text-start"; id: string }
   | { type: "text-delta"; id: string; delta: string }
   | { type: "text-end"; id: string };
@@ -53,6 +64,43 @@ export function decodeFundChatRealtimeChunk(raw: unknown): FundChatRealtimeChunk
     typeof parsed.delta === "string"
   ) {
     return { type: parsed.type, id: parsed.id, delta: parsed.delta };
+  }
+
+  if (parsed.type === "thinking-activity" && isRecord(parsed.activity)) {
+    const kind =
+      typeof parsed.activity.kind === "string" ? parsed.activity.kind.trim() : "";
+    const label =
+      typeof parsed.activity.label === "string"
+        ? parsed.activity.label.trim()
+        : "";
+    const active =
+      typeof parsed.activity.active === "boolean"
+        ? parsed.activity.active
+        : Boolean(parsed.activity.active);
+    const eventType =
+      typeof parsed.activity.eventType === "string" &&
+      parsed.activity.eventType.trim()
+        ? parsed.activity.eventType.trim()
+        : undefined;
+    const itemType =
+      typeof parsed.activity.itemType === "string" &&
+      parsed.activity.itemType.trim()
+        ? parsed.activity.itemType.trim()
+        : undefined;
+    if (!kind || !label) {
+      return null;
+    }
+    return {
+      type: "thinking-activity",
+      id: parsed.id,
+      activity: {
+        kind,
+        label,
+        active,
+        ...(eventType ? { eventType } : {}),
+        ...(itemType ? { itemType } : {}),
+      },
+    };
   }
 
   return null;

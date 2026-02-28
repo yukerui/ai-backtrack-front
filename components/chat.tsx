@@ -27,6 +27,7 @@ import type {
   BacktestArtifactItem,
   ChatMessage,
   PlotlyChartPayload,
+  ThinkingActivityPayload,
 } from "@/lib/types";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import { Artifact } from "./artifact";
@@ -55,7 +56,8 @@ type TaskStatusResponse = {
 };
 
 type TaskPollEvent =
-  | { type: "reasoning-delta"; delta: string }
+  | { type: "reasoning-delta"; id?: string; delta: string }
+  | { type: "thinking-activity"; activity: ThinkingActivityPayload }
   | { type: "text-delta"; delta: string }
   | { type: "text-replace"; text: string }
   | { type: "plotly-spec"; chart: PlotlyChartPayload }
@@ -157,6 +159,33 @@ function normalizePlotlyCharts(value: unknown): PlotlyChartPayload[] {
   return normalized;
 }
 
+function normalizeThinkingActivity(value: unknown): ThinkingActivityPayload | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<ThinkingActivityPayload>;
+  const reasoningId =
+    typeof candidate.reasoningId === "string" ? candidate.reasoningId.trim() : "";
+  const kind = typeof candidate.kind === "string" ? candidate.kind.trim() : "";
+  const label =
+    typeof candidate.label === "string" ? candidate.label.trim() : "";
+  if (!reasoningId || !kind || !label) {
+    return null;
+  }
+  return {
+    reasoningId,
+    kind,
+    label,
+    active: candidate.active === true,
+    ...(typeof candidate.eventType === "string" && candidate.eventType.trim()
+      ? { eventType: candidate.eventType.trim() }
+      : {}),
+    ...(typeof candidate.itemType === "string" && candidate.itemType.trim()
+      ? { itemType: candidate.itemType.trim() }
+      : {}),
+  };
+}
+
 function normalizeTaskPollEvents(value: unknown): TaskPollEvent[] {
   if (!Array.isArray(value)) {
     return [];
@@ -172,7 +201,27 @@ function normalizeTaskPollEvents(value: unknown): TaskPollEvent[] {
 
     if (type === "reasoning-delta" || type === "text-delta") {
       if (typeof candidate.delta === "string" && candidate.delta) {
-        normalized.push({ type, delta: candidate.delta });
+        if (type === "reasoning-delta") {
+          normalized.push({
+            type,
+            delta: candidate.delta,
+            ...(typeof candidate.id === "string" && candidate.id.trim()
+              ? { id: candidate.id.trim() }
+              : {}),
+          });
+        } else {
+          normalized.push({ type, delta: candidate.delta });
+        }
+      }
+      continue;
+    }
+
+    if (type === "thinking-activity") {
+      const activity = normalizeThinkingActivity(
+        (candidate as { activity?: unknown }).activity
+      );
+      if (activity) {
+        normalized.push({ type: "thinking-activity", activity });
       }
       continue;
     }
@@ -247,6 +296,29 @@ function extractExistingArtifactItems(
     );
   }
   return [];
+}
+
+function extractExistingThinkingActivity(
+  message: ChatMessage
+): ThinkingActivityPayload | null {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i];
+    if (
+      typeof part !== "object" ||
+      part === null ||
+      (part as { type?: unknown }).type !== "data-thinking-activity"
+    ) {
+      continue;
+    }
+    const normalized = normalizeThinkingActivity(
+      (part as { data?: unknown }).data
+    );
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function extractMessageText(message: ChatMessage) {
@@ -700,10 +772,15 @@ export function Chat({
                 chartById.set(chart.id, chart);
               }
               let artifactItems = extractExistingArtifactItems(msg);
+              let thinkingActivity = extractExistingThinkingActivity(msg);
 
               for (const event of pollEvents) {
                 if (event.type === "reasoning-delta") {
                   nextReasoning += event.delta;
+                  continue;
+                }
+                if (event.type === "thinking-activity") {
+                  thinkingActivity = event.activity;
                   continue;
                 }
                 if (event.type === "text-delta") {
@@ -745,6 +822,14 @@ export function Chat({
                       {
                         type: "text" as const,
                         text: nextText,
+                      },
+                    ]
+                  : []),
+                ...(thinkingActivity
+                  ? [
+                      {
+                        type: "data-thinking-activity" as const,
+                        data: thinkingActivity,
                       },
                     ]
                   : []),

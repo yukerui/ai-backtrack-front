@@ -10,7 +10,11 @@ import {
 import { buildArtifactItems } from "@/lib/artifacts";
 import { getMessagesByChatId, updateMessage } from "@/lib/db/queries";
 import { extractPlotlyChartsFromText, normalizePlotlyCharts } from "@/lib/plotly";
-import type { BacktestArtifactItem, PlotlyChartPayload } from "@/lib/types";
+import type {
+  BacktestArtifactItem,
+  PlotlyChartPayload,
+  ThinkingActivityPayload,
+} from "@/lib/types";
 import {
   compareAndSwapTaskCursorState,
   getTaskCursorState,
@@ -44,7 +48,8 @@ const FAILURE_STATUSES = new Set([
 ]);
 
 type TaskPollEvent =
-  | { type: "reasoning-delta"; delta: string }
+  | { type: "reasoning-delta"; id?: string; delta: string }
+  | { type: "thinking-activity"; activity: ThinkingActivityPayload }
   | { type: "text-delta"; delta: string }
   | { type: "text-replace"; text: string }
   | { type: "plotly-spec"; chart: PlotlyChartPayload }
@@ -134,7 +139,21 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
 
   for (const chunk of chunks) {
     if (chunk.type === "reasoning-delta") {
-      events.push({ type: "reasoning-delta", delta: chunk.delta });
+      events.push({ type: "reasoning-delta", id: chunk.id, delta: chunk.delta });
+      continue;
+    }
+    if (chunk.type === "thinking-activity") {
+      events.push({
+        type: "thinking-activity",
+        activity: {
+          reasoningId: chunk.id,
+          kind: chunk.activity.kind,
+          label: chunk.activity.label,
+          active: chunk.activity.active,
+          ...(chunk.activity.eventType ? { eventType: chunk.activity.eventType } : {}),
+          ...(chunk.activity.itemType ? { itemType: chunk.activity.itemType } : {}),
+        },
+      });
       continue;
     }
     if (chunk.type === "text-delta") {

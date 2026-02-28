@@ -101,11 +101,15 @@ type UpstreamDeltaPayload = {
   choices?: Array<{
     delta?: UpstreamChoiceDelta;
   }>;
+  error?: {
+    message?: string;
+  };
 };
 
 type UpstreamChoiceDelta = {
   content?: string | Array<{ text?: string }>;
   reasoning?: string;
+  activity?: unknown;
 };
 
 function extractSsePayload(eventBlock: string) {
@@ -134,6 +138,46 @@ function extractTextDelta(delta: UpstreamChoiceDelta | undefined) {
 
 function extractReasoningDelta(delta: UpstreamChoiceDelta | undefined) {
   return typeof delta?.reasoning === "string" ? delta.reasoning : "";
+}
+
+function normalizeThinkingActivityDelta(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as {
+    kind?: unknown;
+    label?: unknown;
+    active?: unknown;
+    eventType?: unknown;
+    itemType?: unknown;
+  };
+  const kind =
+    typeof candidate.kind === "string" && candidate.kind.trim()
+      ? candidate.kind.trim()
+      : "thinking";
+  const label =
+    typeof candidate.label === "string" && candidate.label.trim()
+      ? candidate.label.trim()
+      : "正在思考";
+  const active =
+    typeof candidate.active === "boolean"
+      ? candidate.active
+      : Boolean(candidate.active);
+  const eventType =
+    typeof candidate.eventType === "string" && candidate.eventType.trim()
+      ? candidate.eventType.trim()
+      : undefined;
+  const itemType =
+    typeof candidate.itemType === "string" && candidate.itemType.trim()
+      ? candidate.itemType.trim()
+      : undefined;
+  return {
+    kind,
+    label,
+    active,
+    ...(eventType ? { eventType } : {}),
+    ...(itemType ? { itemType } : {}),
+  };
 }
 
 function extractArtifactsFromText(text: string) {
@@ -177,8 +221,33 @@ async function streamUpstreamResponse(response: Response) {
       return;
     }
 
+    const upstreamErrorMessage =
+      typeof parsed?.error?.message === "string" ? parsed.error.message.trim() : "";
+    if (upstreamErrorMessage) {
+      throw new Error(`Upstream stream error: ${upstreamErrorMessage}`);
+    }
+
     const delta = parsed?.choices?.[0]?.delta;
+    const activityDelta = normalizeThinkingActivityDelta(delta?.activity);
     const reasoningDelta = extractReasoningDelta(delta);
+    if (activityDelta) {
+      if (!reasoningStarted) {
+        await appendRealtimeChunk({
+          type: "reasoning-start",
+          id: reasoningPartId,
+        });
+        reasoningStarted = true;
+      }
+      await appendRealtimeChunk({
+        type: "thinking-activity",
+        id: reasoningPartId,
+        activity: activityDelta,
+      });
+      taskDebug("thinking_activity", {
+        kind: activityDelta.kind,
+        active: activityDelta.active,
+      });
+    }
     if (reasoningDelta) {
       if (!reasoningStarted) {
         await appendRealtimeChunk({
@@ -241,6 +310,15 @@ async function streamUpstreamResponse(response: Response) {
   }
 
   if (reasoningStarted) {
+    await appendRealtimeChunk({
+      type: "thinking-activity",
+      id: reasoningPartId,
+      activity: {
+        kind: "thinking",
+        label: "正在思考",
+        active: false,
+      },
+    });
     await appendRealtimeChunk({
       type: "reasoning-end",
       id: reasoningPartId,
