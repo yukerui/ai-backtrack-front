@@ -123,15 +123,13 @@ export const ReasoningTrigger = memo(
         {children ?? (
           <>
             <BrainIcon className="size-3" />
-            <span>{label}</span>
-            {showStreamingCursor && isStreaming && (
-              <span
-                aria-hidden
-                className="relative inline-block h-3 w-5 overflow-hidden align-middle"
-              >
-                <span className="animate-thinking-caret-slide absolute top-0 left-0 h-3 w-[2px] rounded-full bg-current/70" />
-              </span>
-            )}
+            <span
+              className={cn(
+                showStreamingCursor && isStreaming && "thinking-shimmer"
+              )}
+            >
+              {label}
+            </span>
             <ChevronDownIcon
               className={cn(
                 "size-2.5 transition-transform",

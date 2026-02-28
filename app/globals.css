@@ -259,17 +259,45 @@
   @apply min-w-3;
 }
 
-@keyframes thinking-caret-slide {
+@keyframes thinking-shimmer-sweep {
   from {
-    transform: translateX(0);
+    background-position: 0% 50%;
   }
   to {
-    transform: translateX(18px);
+    background-position: 100% 50%;
   }
 }
 
-.animate-thinking-caret-slide {
-  animation: thinking-caret-slide 1.1s linear infinite;
+.thinking-shimmer {
+  display: inline-block;
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    currentColor 0%,
+    #ffffff 48%,
+    currentColor 100%
+  );
+  background-size: 220% 100%;
+  background-position: 0% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: thinking-shimmer-sweep 1.4s ease-in-out infinite alternate;
+}
+
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .thinking-shimmer {
+    animation: none;
+    color: currentColor;
+    background-image: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer {
+    animation: none;
+    color: currentColor;
+    background-image: none;
+  }
 }
 
 .cm-lineNumbers .cm-activeLineGutter {

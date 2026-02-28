@@ -528,13 +528,7 @@ export const ThinkingMessage = () => {
 
         <div className="flex w-full flex-col gap-2 md:gap-4">
           <div className="flex items-center gap-1 p-0 text-muted-foreground text-sm">
-            <span>正在思考</span>
-            <span
-              aria-hidden
-              className="relative inline-block h-3 w-5 overflow-hidden align-middle"
-            >
-              <span className="animate-thinking-caret-slide absolute top-0 left-0 h-3 w-[2px] rounded-full bg-current/70" />
-            </span>
+            <span className="thinking-shimmer">正在思考</span>
           </div>
         </div>
       </div>
