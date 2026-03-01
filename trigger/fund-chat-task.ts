@@ -16,8 +16,6 @@ const payloadSchema = z.object({
   isNewChat: z.boolean().optional(),
   turnstileToken: z.string().optional(),
   policyPrechecked: z.boolean().optional(),
-  cacheMode: z.enum(["force", "default", "bypass"]).optional(),
-  cacheReason: z.string().optional(),
 });
 
 const TASK_MAX_DURATION_SECONDS = Number.parseInt(
@@ -350,8 +348,6 @@ export const fundChatTask = schemaTask({
       isNewChat,
       turnstileToken,
       policyPrechecked,
-      cacheMode,
-      cacheReason,
     },
     { signal }
   ) => {
@@ -363,8 +359,6 @@ export const fundChatTask = schemaTask({
       isNewChat: Boolean(isNewChat),
       hasTurnstileToken: Boolean(turnstileToken?.trim()),
       policyPrechecked: Boolean(policyPrechecked),
-      cacheMode: cacheMode || "",
-      cacheReason: cacheReason || "",
     });
     const base = process.env.CLAUDE_CODE_API_BASE
       ? normalizeBase(process.env.CLAUDE_CODE_API_BASE)
@@ -395,13 +389,6 @@ export const fundChatTask = schemaTask({
         headers["x-policy-prechecked"] = "1";
       }
     }
-    if (cacheMode) {
-      headers["x-cache-mode"] = cacheMode;
-    }
-    if (cacheReason) {
-      headers["x-cache-reason"] = cacheReason;
-    }
-
     const requestBody = JSON.stringify({
       model: model || "gpt-5.3-codex",
       stream: true,

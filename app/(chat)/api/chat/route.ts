@@ -28,11 +28,9 @@ import {
 import {
   createStreamId,
   deleteChatById,
-  existsQuestionAskedByOtherUsersToday,
   getChatById,
   getMessageCountByUserId,
   getMessagesByChatId,
-  saveQuestionDigestDaily,
   saveChat,
   saveMessages,
   updateChatTitleById,
@@ -40,14 +38,6 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import {
-  getQuestionHash,
-  normalizeQuestionForCache,
-} from "@/lib/cache/question-fingerprint";
-import {
-  getShanghaiDateString,
-  isAShareTradingDay,
-} from "@/lib/market/a-share-calendar";
 import {
   extractPlotlyChartsFromText,
   normalizePlotlyCharts,
@@ -230,99 +220,6 @@ type ClaudeProxyPrecheckResult = {
   reply: string;
 };
 
-type CacheMode = "force" | "default" | "bypass";
-
-type CacheDecision = {
-  mode: CacheMode;
-  reason: string;
-  day: string;
-  questionHash: string;
-  repeatedByOthersToday: boolean;
-  isTradingDay: boolean | null;
-};
-
-const DEFAULT_CACHE_DECISION: CacheDecision = {
-  mode: "default",
-  reason: "default",
-  day: "",
-  questionHash: "",
-  repeatedByOthersToday: false,
-  isTradingDay: null,
-};
-
-async function resolveCacheDecision({
-  backend,
-  userText,
-  userId,
-  chatId,
-}: {
-  backend: string;
-  userText: string;
-  userId: string;
-  chatId: string;
-}): Promise<CacheDecision> {
-  if (backend !== "claude_proxy") {
-    return DEFAULT_CACHE_DECISION;
-  }
-
-  const normalizedQuestion = normalizeQuestionForCache(userText);
-  const questionHash = getQuestionHash(userText);
-  if (!normalizedQuestion || !questionHash) {
-    return {
-      ...DEFAULT_CACHE_DECISION,
-      reason: "empty_question",
-      questionHash,
-    };
-  }
-
-  const now = new Date();
-  const day = getShanghaiDateString(now);
-  await saveQuestionDigestDaily({
-    day,
-    questionHash,
-    normalizedQuestion,
-    userId,
-    chatId,
-  });
-
-  const repeatedByOthersToday = await existsQuestionAskedByOtherUsersToday({
-    day,
-    questionHash,
-    currentUserId: userId,
-  });
-  if (!repeatedByOthersToday) {
-    return {
-      mode: "default",
-      reason: "not_repeated_today",
-      day,
-      questionHash,
-      repeatedByOthersToday,
-      isTradingDay: null,
-    };
-  }
-
-  const isTradingDay = await isAShareTradingDay(now);
-  if (!isTradingDay) {
-    return {
-      mode: "force",
-      reason: "non_trading_day_repeated_today",
-      day,
-      questionHash,
-      repeatedByOthersToday,
-      isTradingDay,
-    };
-  }
-
-  return {
-    mode: "default",
-    reason: "trading_day_repeated_today",
-    day,
-    questionHash,
-    repeatedByOthersToday,
-    isTradingDay,
-  };
-}
-
 function parseTurnstileReason(message: string) {
   const match = String(message || "").match(
     /Turnstile verification failed:\s*([a-zA-Z0-9_-]+)/i
@@ -471,8 +368,6 @@ async function streamFromClaudeProxy({
   userText,
   userType,
   turnstileToken,
-  cacheMode,
-  cacheReason,
 }: {
   dataStream: any;
   chatId: string;
@@ -480,8 +375,6 @@ async function streamFromClaudeProxy({
   userText: string;
   userType: UserType;
   turnstileToken?: string;
-  cacheMode?: CacheMode;
-  cacheReason?: string;
 }) {
   const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
   const base = rawBase.replace(/\/+$/, "");
@@ -500,8 +393,6 @@ async function streamFromClaudeProxy({
       "x-chat-new": isNewChat ? "true" : "false",
       "x-user-type": userType,
       ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
-      ...(cacheMode ? { "x-cache-mode": cacheMode } : {}),
-      ...(cacheReason ? { "x-cache-reason": cacheReason } : {}),
     },
     body: JSON.stringify({
       model: FIXED_CHAT_MODEL,
@@ -790,19 +681,6 @@ export async function POST(request: Request) {
 
     const backend = process.env.CHAT_BACKEND || DEFAULT_BACKEND;
     const latestUserText = extractLatestUserText(requestBody);
-    let cacheDecision = DEFAULT_CACHE_DECISION;
-    if (backend === "claude_proxy" && latestUserText) {
-      try {
-        cacheDecision = await resolveCacheDecision({
-          backend,
-          userText: latestUserText,
-          userId: session.user.id,
-          chatId: id,
-        });
-      } catch (error) {
-        console.warn("[chat-api] failed to resolve cache decision, fallback to default", error);
-      }
-    }
     const turnstileTokenFromBody =
       typeof rawRequestBody?.turnstileToken === "string"
         ? rawRequestBody.turnstileToken
@@ -828,10 +706,6 @@ export async function POST(request: Request) {
       useTriggerDev: USE_TRIGGER_DEV,
       isToolApprovalFlow,
       hasTurnstileToken: Boolean(turnstileToken),
-      cacheMode: cacheDecision.mode,
-      cacheReason: cacheDecision.reason,
-      cacheRepeatedByOthersToday: cacheDecision.repeatedByOthersToday,
-      cacheIsTradingDay: cacheDecision.isTradingDay,
     });
     if (backend === "claude_proxy" && !turnstileToken) {
       return Response.json(
@@ -997,8 +871,6 @@ export async function POST(request: Request) {
               isNewChat: !chat,
               turnstileToken: turnstileToken || undefined,
               policyPrechecked: true,
-              cacheMode: cacheDecision.mode,
-              cacheReason: cacheDecision.reason,
             },
             {
               idempotencyKey: triggerIdempotencyKey,
@@ -1315,8 +1187,6 @@ export async function POST(request: Request) {
             userText: latestUserText,
             userType,
             turnstileToken,
-            cacheMode: cacheDecision.mode,
-            cacheReason: cacheDecision.reason,
           });
         }
 
