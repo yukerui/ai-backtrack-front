@@ -10,6 +10,7 @@ import {
   gte,
   inArray,
   lt,
+  ne,
   type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -24,6 +25,7 @@ import {
   type DBMessage,
   document,
   message,
+  questionDigestDaily,
   type Suggestion,
   stream,
   suggestion,
@@ -48,6 +50,75 @@ export async function getUser(email: string): Promise<User[]> {
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to get user by email"
+    );
+  }
+}
+
+export async function saveQuestionDigestDaily({
+  day,
+  questionHash,
+  normalizedQuestion,
+  userId,
+  chatId,
+}: {
+  day: string;
+  questionHash: string;
+  normalizedQuestion: string;
+  userId: string;
+  chatId: string;
+}) {
+  if (!day || !questionHash || !normalizedQuestion || !userId || !chatId) {
+    return;
+  }
+
+  try {
+    return await db.insert(questionDigestDaily).values({
+      day,
+      questionHash,
+      normalizedQuestion,
+      userId,
+      chatId,
+      createdAt: new Date(),
+    });
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to save question digest daily"
+    );
+  }
+}
+
+export async function existsQuestionAskedByOtherUsersToday({
+  day,
+  questionHash,
+  currentUserId,
+}: {
+  day: string;
+  questionHash: string;
+  currentUserId: string;
+}) {
+  if (!day || !questionHash || !currentUserId) {
+    return false;
+  }
+
+  try {
+    const [row] = await db
+      .select({ id: questionDigestDaily.id })
+      .from(questionDigestDaily)
+      .where(
+        and(
+          eq(questionDigestDaily.day, day),
+          eq(questionDigestDaily.questionHash, questionHash),
+          ne(questionDigestDaily.userId, currentUserId)
+        )
+      )
+      .limit(1);
+
+    return Boolean(row?.id);
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to check question digest daily"
     );
   }
 }

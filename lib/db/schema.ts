@@ -1,5 +1,6 @@
 import type { InferSelectModel } from "drizzle-orm";
 import {
+  index,
   boolean,
   foreignKey,
   json,
@@ -168,3 +169,33 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
+
+export const questionDigestDaily = pgTable(
+  "QuestionDigestDaily",
+  {
+    id: uuid("id").primaryKey().notNull().defaultRandom(),
+    day: varchar("day", { length: 10 }).notNull(),
+    questionHash: varchar("questionHash", { length: 64 }).notNull(),
+    normalizedQuestion: text("normalizedQuestion").notNull(),
+    userId: uuid("userId")
+      .notNull()
+      .references(() => user.id),
+    chatId: uuid("chatId")
+      .notNull()
+      .references(() => chat.id),
+    createdAt: timestamp("createdAt").notNull(),
+  },
+  (table) => ({
+    dayHashIdx: index("QuestionDigestDaily_day_hash_idx").on(
+      table.day,
+      table.questionHash
+    ),
+    dayHashUserIdx: index("QuestionDigestDaily_day_hash_user_idx").on(
+      table.day,
+      table.questionHash,
+      table.userId
+    ),
+  })
+);
+
+export type QuestionDigestDaily = InferSelectModel<typeof questionDigestDaily>;
