@@ -167,6 +167,17 @@ function deriveSummaryFallbackFromReasoning(reasoningText: string) {
   return "正在思考";
 }
 
+function getReasoningSummaryDeltaFromChunk(chunk: FundChatRealtimeChunk) {
+  const candidate = chunk as { type?: unknown; delta?: unknown };
+  if (
+    candidate.type === "reasoning-summary-delta" &&
+    typeof candidate.delta === "string"
+  ) {
+    return candidate.delta;
+  }
+  return "";
+}
+
 async function retrieveRunWithRetry(runId: string) {
   let lastError: unknown;
   for (let attempt = 0; attempt <= RUN_RETRIEVE_RETRIES; attempt += 1) {
@@ -214,11 +225,12 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
       reasoningDeltaPieces.push(chunk.delta);
       continue;
     }
-    if (chunk.type === "reasoning-summary-delta") {
+    const reasoningSummaryDelta = getReasoningSummaryDeltaFromChunk(chunk);
+    if (reasoningSummaryDelta) {
       events.push({
         type: "reasoning-summary-delta",
         id: chunk.id,
-        delta: chunk.delta,
+        delta: reasoningSummaryDelta,
       });
       sawReasoningSummary = true;
       continue;
