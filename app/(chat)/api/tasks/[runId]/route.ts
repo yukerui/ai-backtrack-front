@@ -47,8 +47,12 @@ const FAILURE_STATUSES = new Set([
   "EXPIRED",
 ]);
 
+const RUN_RETRIEVE_RETRIES = 2;
+const RUN_RETRIEVE_RETRY_DELAY_MS = 250;
+
 type TaskPollEvent =
   | { type: "reasoning-delta"; id?: string; delta: string }
+  | { type: "reasoning-summary-delta"; id?: string; delta: string }
   | { type: "thinking-activity"; activity: ThinkingActivityPayload }
   | { type: "text-delta"; delta: string }
   | { type: "text-replace"; text: string }
@@ -114,6 +118,71 @@ function forbiddenTaskAccess(cause: string) {
   return NextResponse.json({ error: "Forbidden", cause }, { status: 403 });
 }
 
+function isTimeoutLikeError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : String(error || "");
+  const name = error instanceof Error ? error.name : "";
+  return (
+    name === "TimeoutError" ||
+    /aborted due to timeout/i.test(message) ||
+    /operation was aborted/i.test(message)
+  );
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isCommandLikeReasoningLine(line: string) {
+  const value = line.trim();
+  if (!value) {
+    return false;
+  }
+  if (/^\[blocked\]/i.test(value)) {
+    return true;
+  }
+  return /^(?:\$?\s*)?(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh)\b/i.test(
+    value
+  );
+}
+
+function deriveSummaryFallbackFromReasoning(reasoningText: string) {
+  const normalized = reasoningText.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return "";
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    if (!isCommandLikeReasoningLine(line)) {
+      return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+    }
+  }
+  return "正在思考";
+}
+
+async function retrieveRunWithRetry(runId: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RUN_RETRIEVE_RETRIES; attempt += 1) {
+    try {
+      return await runs.retrieve<typeof fundChatTask>(runId);
+    } catch (error) {
+      lastError = error;
+      if (!isTimeoutLikeError(error) || attempt >= RUN_RETRIEVE_RETRIES) {
+        break;
+      }
+      await sleep(RUN_RETRIEVE_RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || "runs_retrieve_failed"));
+}
+
 async function readRealtimeSnapshot(runId: string, cursor: number) {
   const chunks: FundChatRealtimeChunk[] = [];
   let nextCursor = cursor;
@@ -136,10 +205,22 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
   }
 
   const events: TaskPollEvent[] = [];
+  const reasoningDeltaPieces: string[] = [];
+  let sawReasoningSummary = false;
 
   for (const chunk of chunks) {
     if (chunk.type === "reasoning-delta") {
       events.push({ type: "reasoning-delta", id: chunk.id, delta: chunk.delta });
+      reasoningDeltaPieces.push(chunk.delta);
+      continue;
+    }
+    if (chunk.type === "reasoning-summary-delta") {
+      events.push({
+        type: "reasoning-summary-delta",
+        id: chunk.id,
+        delta: chunk.delta,
+      });
+      sawReasoningSummary = true;
       continue;
     }
     if (chunk.type === "thinking-activity") {
@@ -161,22 +242,42 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
     }
   }
 
+  if (!sawReasoningSummary && reasoningDeltaPieces.length > 0) {
+    const fallbackSummary = deriveSummaryFallbackFromReasoning(
+      reasoningDeltaPieces.join("")
+    );
+    if (fallbackSummary) {
+      events.push({
+        type: "reasoning-summary-delta",
+        delta: fallbackSummary,
+      });
+    }
+  }
+
   return { events, nextCursor };
 }
 
 function toLegacyDeltaText(events: TaskPollEvent[]) {
   let reasoningText = "";
+  let reasoningSummaryText = "";
   let text = "";
   for (const event of events) {
     if (event.type === "reasoning-delta") {
       reasoningText += event.delta;
       continue;
     }
+    if (event.type === "reasoning-summary-delta") {
+      reasoningSummaryText += event.delta;
+      continue;
+    }
     if (event.type === "text-delta") {
       text += event.delta;
     }
   }
-  return { reasoningText, text };
+  if (!reasoningSummaryText && reasoningText) {
+    reasoningSummaryText = deriveSummaryFallbackFromReasoning(reasoningText);
+  }
+  return { reasoningText, reasoningSummaryText, text };
 }
 
 export async function GET(
@@ -233,11 +334,6 @@ export async function GET(
     return forbiddenTaskAccess("stale_cursor_state");
   }
 
-  const run = await runs.retrieve<typeof fundChatTask>(runId);
-  const payloadUserId = (run.payload as { userId?: string } | null)?.userId;
-  if (payloadUserId && payloadUserId !== session.user.id) {
-    return forbiddenTaskAccess("run_payload_user_mismatch");
-  }
   const realtimeSnapshot = await readRealtimeSnapshot(runId, cursor);
   const nextCursor = realtimeSnapshot.nextCursor;
   const nextCursorSig = signTaskCursor({
@@ -258,6 +354,56 @@ export async function GET(
     return forbiddenTaskAccess("cursor_advance_conflict");
   }
 
+  let run: Awaited<ReturnType<typeof runs.retrieve<typeof fundChatTask>>>;
+  try {
+    run = await retrieveRunWithRetry(runId);
+  } catch (error) {
+    const legacy = toLegacyDeltaText(realtimeSnapshot.events);
+    const message = error instanceof Error ? error.message : String(error || "runs_retrieve_failed");
+    if (isTimeoutLikeError(error)) {
+      return NextResponse.json({
+        status: "RUNNING",
+        isCompleted: false,
+        isFailed: false,
+        nextCursor,
+        nextCursorSig,
+        events: realtimeSnapshot.events,
+        reasoningText: legacy.reasoningText,
+        reasoningSummaryText: legacy.reasoningSummaryText,
+        text: legacy.text,
+        error: {
+          message,
+          transient: true,
+          cause: "runs_retrieve_timeout",
+        },
+      });
+    }
+    return NextResponse.json(
+      {
+        status: "UNKNOWN",
+        isCompleted: false,
+        isFailed: false,
+        nextCursor,
+        nextCursorSig,
+        events: realtimeSnapshot.events,
+        reasoningText: legacy.reasoningText,
+        reasoningSummaryText: legacy.reasoningSummaryText,
+        text: legacy.text,
+        error: {
+          message,
+          transient: true,
+          cause: "runs_retrieve_failed",
+        },
+      },
+      { status: 502 }
+    );
+  }
+
+  const payloadUserId = (run.payload as { userId?: string } | null)?.userId;
+  if (payloadUserId && payloadUserId !== session.user.id) {
+    return forbiddenTaskAccess("run_payload_user_mismatch");
+  }
+
   if (run.status !== "COMPLETED") {
     const legacy = toLegacyDeltaText(realtimeSnapshot.events);
     return NextResponse.json({
@@ -268,6 +414,7 @@ export async function GET(
       nextCursorSig,
       events: realtimeSnapshot.events,
       reasoningText: legacy.reasoningText,
+      reasoningSummaryText: legacy.reasoningSummaryText,
       text: legacy.text,
       error: run.error || null,
     });
@@ -384,6 +531,7 @@ export async function GET(
     nextCursorSig,
     events: allEvents,
     reasoningText: legacy.reasoningText,
+    reasoningSummaryText: legacy.reasoningSummaryText,
     text: finalText,
     artifacts: artifactItems,
     plotlyCharts,
