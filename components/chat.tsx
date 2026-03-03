@@ -41,6 +41,13 @@ import type { VisibilityType } from "./visibility-selector";
 const TASK_AUTH_PATTERN =
   "\\[\\[task-auth:([A-Za-z0-9_-]+):([0-9]+):([A-Za-z0-9._-]+)\\]\\]";
 const TASK_POLL_INTERVAL_MS = 2000;
+const SUMMARY_MAX_CHARS = 18;
+const SUMMARY_COMMAND_OR_TECH_REGEX =
+  /\b(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh|command_execution|tool_call|tool_result|web_search|plan_update|reasoning-delta|item\.completed|item\.delta|item\.started|spawn|stdout|stderr)\b/i;
+const SUMMARY_SHELL_TOKEN_REGEX =
+  /(?:\|\||&&|;|\||`|\$\(|\$\{|\b--[a-z0-9_-]+\b|<<<?|>>>?)/i;
+const SUMMARY_PATH_REGEX = /(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]*/;
+const CJK_REGEX = /[\u3400-\u9fff]/;
 
 type TaskStatusResponse = {
   status: string;
@@ -49,7 +56,9 @@ type TaskStatusResponse = {
   nextCursor?: number;
   nextCursorSig?: string;
   events?: TaskPollEvent[];
+  reasoningDetailText?: string;
   reasoningText?: string;
+  reasoningSummaryText?: string;
   text?: string;
   artifacts?: BacktestArtifactItem[];
   plotlyCharts?: PlotlyChartPayload[];
@@ -57,6 +66,7 @@ type TaskStatusResponse = {
 
 type TaskPollEvent =
   | { type: "reasoning-delta"; id?: string; delta: string }
+  | { type: "reasoning-summary-delta"; id?: string; delta: string }
   | { type: "thinking-activity"; activity: ThinkingActivityPayload }
   | { type: "text-delta"; delta: string }
   | { type: "text-replace"; text: string }
@@ -81,6 +91,55 @@ type DataTaskAuthPart = {
 type SetChatMessages = (
   messages: ChatMessage[] | ((messages: ChatMessage[]) => ChatMessage[])
 ) => void;
+
+function clipTextByChars(text: string, maxChars: number) {
+  const chars = Array.from(text);
+  if (chars.length <= maxChars) {
+    return text;
+  }
+  return `${chars.slice(0, maxChars).join("")}…`;
+}
+
+function normalizeSummaryLine(line: string) {
+  return line
+    .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+    .replace(/[*_`#>~]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeReasoningSummary(raw: string) {
+  const normalized = raw.replace(/\r\n/g, "\n");
+  const lines = normalized
+    .split("\n")
+    .map(normalizeSummaryLine)
+    .filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!line) {
+      continue;
+    }
+    if (!CJK_REGEX.test(line)) {
+      continue;
+    }
+    if (SUMMARY_COMMAND_OR_TECH_REGEX.test(line)) {
+      continue;
+    }
+    if (SUMMARY_SHELL_TOKEN_REGEX.test(line)) {
+      continue;
+    }
+    if (SUMMARY_PATH_REGEX.test(line)) {
+      continue;
+    }
+    if (/^[A-Za-z0-9_.\-/:\\]+$/.test(line)) {
+      continue;
+    }
+    return clipTextByChars(line, SUMMARY_MAX_CHARS);
+  }
+
+  return "";
+}
 
 function normalizeBacktestArtifactItems(
   value: unknown
@@ -199,9 +258,13 @@ function normalizeTaskPollEvents(value: unknown): TaskPollEvent[] {
     const candidate = entry as Record<string, unknown>;
     const type = typeof candidate.type === "string" ? candidate.type : "";
 
-    if (type === "reasoning-delta" || type === "text-delta") {
+    if (
+      type === "reasoning-delta" ||
+      type === "reasoning-summary-delta" ||
+      type === "text-delta"
+    ) {
       if (typeof candidate.delta === "string" && candidate.delta) {
-        if (type === "reasoning-delta") {
+        if (type === "reasoning-delta" || type === "reasoning-summary-delta") {
           normalized.push({
             type,
             delta: candidate.delta,
@@ -345,6 +408,29 @@ function extractReasoningText(message: ChatMessage) {
     )
     .map((part) => String((part as { text?: unknown }).text || ""))
     .join("\n");
+}
+
+function extractThinkingSummaryText(message: ChatMessage) {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i];
+    if (
+      typeof part !== "object" ||
+      part === null ||
+      (part as { type?: unknown }).type !== "data-thinking-summary"
+    ) {
+      continue;
+    }
+    const data = (part as { data?: { text?: unknown } }).data;
+    const text =
+      typeof data?.text === "string"
+        ? sanitizeReasoningSummary(data.text)
+        : "";
+    if (text) {
+      return text;
+    }
+  }
+  return "";
 }
 
 function extractTaskPollingMetaFromMessage(
@@ -725,13 +811,25 @@ export function Chat({
         const pollEvents = normalizeTaskPollEvents(payload.events);
         if (pollEvents.length === 0) {
           const reasoningDelta =
-            typeof payload.reasoningText === "string"
-              ? payload.reasoningText
+            typeof payload.reasoningDetailText === "string"
+              ? payload.reasoningDetailText
+              : typeof payload.reasoningText === "string"
+                ? payload.reasoningText
+              : "";
+          const reasoningSummaryDelta =
+            typeof payload.reasoningSummaryText === "string"
+              ? sanitizeReasoningSummary(payload.reasoningSummaryText)
               : "";
           const textValue =
             typeof payload.text === "string" ? payload.text : "";
           if (reasoningDelta) {
             pollEvents.push({ type: "reasoning-delta", delta: reasoningDelta });
+          }
+          if (reasoningSummaryDelta) {
+            pollEvents.push({
+              type: "reasoning-summary-delta",
+              delta: reasoningSummaryDelta,
+            });
           }
           if (textValue) {
             pollEvents.push(
@@ -766,6 +864,7 @@ export function Chat({
               }
 
               let nextReasoning = extractReasoningText(msg);
+              let nextReasoningSummary = extractThinkingSummaryText(msg);
               let nextText = extractMessageText(msg);
               const chartById = new Map<string, PlotlyChartPayload>();
               for (const chart of extractExistingPlotlyCharts(msg)) {
@@ -778,6 +877,13 @@ export function Chat({
               for (const event of pollEvents) {
                 if (event.type === "reasoning-delta") {
                   nextReasoning += event.delta;
+                  continue;
+                }
+                if (event.type === "reasoning-summary-delta") {
+                  const sanitizedSummary = sanitizeReasoningSummary(event.delta);
+                  if (sanitizedSummary) {
+                    nextReasoningSummary = sanitizedSummary;
+                  }
                   continue;
                 }
                 if (event.type === "thinking-activity") {
@@ -819,7 +925,7 @@ export function Chat({
               }));
 
               const nextParts = [
-                ...(nextReasoning || thinkingActivity
+                ...(nextReasoning || thinkingActivity || nextReasoningSummary
                   ? [
                       {
                         type: "reasoning" as const,
@@ -843,6 +949,18 @@ export function Chat({
                       {
                         type: "data-thinking-activity" as const,
                         data: thinkingActivity,
+                      },
+                    ]
+                  : []),
+                ...(nextReasoningSummary.trim()
+                  ? [
+                      {
+                        type: "data-thinking-summary" as const,
+                        data: {
+                          reasoningId:
+                            thinkingActivity?.reasoningId || `thinking-${runId}`,
+                          text: nextReasoningSummary.trim(),
+                        },
                       },
                     ]
                   : []),

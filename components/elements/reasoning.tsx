@@ -111,7 +111,7 @@ export const ReasoningTrigger = memo(
     const { isStreaming, isOpen, duration } = useReasoning();
     const elapsedSeconds = Math.max(duration, 1);
     const label =
-      statusLabel ?? (isStreaming ? "正在思考" : `思考了 ${elapsedSeconds} s`);
+      statusLabel ?? (isStreaming ? "正在思考" : `思考了 ${elapsedSeconds}s`);
 
     return (
       <CollapsibleTrigger
@@ -125,7 +125,9 @@ export const ReasoningTrigger = memo(
           <>
             <BrainIcon className="size-3" />
             <span
+              title={label}
               className={cn(
+                "inline-block max-w-[18ch] truncate align-bottom",
                 showStreamingCursor && isStreaming && "thinking-shimmer"
               )}
             >

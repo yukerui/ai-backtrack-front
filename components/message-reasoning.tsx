@@ -12,7 +12,18 @@ type MessageReasoningProps = {
   isLoading: boolean;
   reasoning: string;
   reasoningId?: string;
+  summary?: string;
 };
+
+const SUMMARY_MAX_CHARS = 18;
+
+function clipTextByChars(text: string, maxChars: number) {
+  const chars = Array.from(text);
+  if (chars.length <= maxChars) {
+    return text;
+  }
+  return `${chars.slice(0, maxChars).join("")}…`;
+}
 
 function normalizeReasoningText(raw: string) {
   if (!raw) {
@@ -123,11 +134,22 @@ export function MessageReasoning({
   isLoading,
   reasoning,
   reasoningId,
+  summary,
 }: MessageReasoningProps) {
   const normalizedReasoning = normalizeReasoningText(reasoning);
-  const statusLabel = isLoading
-    ? detectStreamingStatus(normalizedReasoning, activity, reasoningId)
-    : undefined;
+  const normalizedSummary = String(summary || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1);
+  const clippedSummary = normalizedSummary
+    ? clipTextByChars(normalizedSummary, SUMMARY_MAX_CHARS)
+    : "";
+  const statusLabel =
+    isLoading
+      ? clippedSummary ||
+        detectStreamingStatus(normalizedReasoning, activity, reasoningId)
+      : undefined;
 
   return (
     <Reasoning

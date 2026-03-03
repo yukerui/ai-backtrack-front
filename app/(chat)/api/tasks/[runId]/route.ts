@@ -49,6 +49,13 @@ const FAILURE_STATUSES = new Set([
 
 const RUN_RETRIEVE_RETRIES = 2;
 const RUN_RETRIEVE_RETRY_DELAY_MS = 250;
+const SUMMARY_MAX_CHARS = 80;
+const SUMMARY_COMMAND_OR_TECH_REGEX =
+  /\b(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh|command_execution|tool_call|tool_result|web_search|plan_update|reasoning-delta|item\.completed|item\.delta|item\.started|spawn|stdout|stderr)\b/i;
+const SUMMARY_SHELL_TOKEN_REGEX =
+  /(?:\|\||&&|;|\||`|\$\(|\$\{|\b--[a-z0-9_-]+\b|<<<?|>>>?)/i;
+const SUMMARY_PATH_REGEX = /(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]*/;
+const CJK_REGEX = /[\u3400-\u9fff]/;
 
 type TaskPollEvent =
   | { type: "reasoning-delta"; id?: string; delta: string }
@@ -137,6 +144,58 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function clipTextByChars(text: string, maxChars: number) {
+  const chars = Array.from(text);
+  if (chars.length <= maxChars) {
+    return text;
+  }
+  return `${chars.slice(0, maxChars).join("")}…`;
+}
+
+function normalizeSummaryLine(line: string) {
+  return line
+    .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+    .replace(/[*_`#>~]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeSummaryText(raw: string) {
+  const normalized = raw.replace(/\r\n/g, "\n");
+  const lines = normalized
+    .split("\n")
+    .map(normalizeSummaryLine)
+    .filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!line) {
+      continue;
+    }
+    if (!CJK_REGEX.test(line)) {
+      continue;
+    }
+    if (isCommandLikeReasoningLine(line)) {
+      continue;
+    }
+    if (SUMMARY_COMMAND_OR_TECH_REGEX.test(line)) {
+      continue;
+    }
+    if (SUMMARY_SHELL_TOKEN_REGEX.test(line)) {
+      continue;
+    }
+    if (SUMMARY_PATH_REGEX.test(line)) {
+      continue;
+    }
+    if (/^[A-Za-z0-9_.\-/:\\]+$/.test(line)) {
+      continue;
+    }
+    return clipTextByChars(line, SUMMARY_MAX_CHARS);
+  }
+
+  return "";
+}
+
 function isCommandLikeReasoningLine(line: string) {
   const value = line.trim();
   if (!value) {
@@ -151,20 +210,8 @@ function isCommandLikeReasoningLine(line: string) {
 }
 
 function deriveSummaryFallbackFromReasoning(reasoningText: string) {
-  const normalized = reasoningText.replace(/\r\n/g, "\n").trim();
-  if (!normalized) {
-    return "";
-  }
-  const lines = normalized
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (const line of lines) {
-    if (!isCommandLikeReasoningLine(line)) {
-      return line.length > 120 ? `${line.slice(0, 119)}…` : line;
-    }
-  }
-  return "正在思考";
+  const summary = sanitizeSummaryText(reasoningText);
+  return summary || "正在思考";
 }
 
 function getReasoningSummaryDeltaFromChunk(chunk: FundChatRealtimeChunk) {
@@ -218,6 +265,9 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
   const events: TaskPollEvent[] = [];
   const reasoningDeltaPieces: string[] = [];
   let sawReasoningSummary = false;
+  let sawThinkingActivity = false;
+  let latestSummary = "";
+  let latestActivitySummary = "";
 
   for (const chunk of chunks) {
     if (chunk.type === "reasoning-delta") {
@@ -227,15 +277,15 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
     }
     const reasoningSummaryDelta = getReasoningSummaryDeltaFromChunk(chunk);
     if (reasoningSummaryDelta) {
-      events.push({
-        type: "reasoning-summary-delta",
-        id: chunk.id,
-        delta: reasoningSummaryDelta,
-      });
       sawReasoningSummary = true;
+      const sanitizedSummary = sanitizeSummaryText(reasoningSummaryDelta);
+      if (sanitizedSummary) {
+        latestSummary = sanitizedSummary;
+      }
       continue;
     }
     if (chunk.type === "thinking-activity") {
+      sawThinkingActivity = true;
       events.push({
         type: "thinking-activity",
         activity: {
@@ -247,6 +297,10 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
           ...(chunk.activity.itemType ? { itemType: chunk.activity.itemType } : {}),
         },
       });
+      const sanitizedActivitySummary = sanitizeSummaryText(chunk.activity.label);
+      if (sanitizedActivitySummary) {
+        latestActivitySummary = sanitizedActivitySummary;
+      }
       continue;
     }
     if (chunk.type === "text-delta") {
@@ -254,16 +308,20 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
     }
   }
 
-  if (!sawReasoningSummary && reasoningDeltaPieces.length > 0) {
-    const fallbackSummary = deriveSummaryFallbackFromReasoning(
-      reasoningDeltaPieces.join("")
-    );
-    if (fallbackSummary) {
-      events.push({
-        type: "reasoning-summary-delta",
-        delta: fallbackSummary,
-      });
-    }
+  if (!latestSummary && reasoningDeltaPieces.length > 0) {
+    latestSummary = deriveSummaryFallbackFromReasoning(reasoningDeltaPieces.join(""));
+  }
+  if (!latestSummary && latestActivitySummary) {
+    latestSummary = latestActivitySummary;
+  }
+  if (!latestSummary && (sawReasoningSummary || sawThinkingActivity)) {
+    latestSummary = "正在思考";
+  }
+  if (latestSummary) {
+    events.push({
+      type: "reasoning-summary-delta",
+      delta: latestSummary,
+    });
   }
 
   return { events, nextCursor };
@@ -279,7 +337,10 @@ function toLegacyDeltaText(events: TaskPollEvent[]) {
       continue;
     }
     if (event.type === "reasoning-summary-delta") {
-      reasoningSummaryText += event.delta;
+      const sanitizedSummary = sanitizeSummaryText(event.delta);
+      if (sanitizedSummary) {
+        reasoningSummaryText = sanitizedSummary;
+      }
       continue;
     }
     if (event.type === "text-delta") {
@@ -289,7 +350,12 @@ function toLegacyDeltaText(events: TaskPollEvent[]) {
   if (!reasoningSummaryText && reasoningText) {
     reasoningSummaryText = deriveSummaryFallbackFromReasoning(reasoningText);
   }
-  return { reasoningText, reasoningSummaryText, text };
+  return {
+    reasoningText,
+    reasoningDetailText: reasoningText,
+    reasoningSummaryText,
+    text,
+  };
 }
 
 export async function GET(
@@ -381,6 +447,7 @@ export async function GET(
         nextCursorSig,
         events: realtimeSnapshot.events,
         reasoningText: legacy.reasoningText,
+        reasoningDetailText: legacy.reasoningDetailText,
         reasoningSummaryText: legacy.reasoningSummaryText,
         text: legacy.text,
         error: {
@@ -399,6 +466,7 @@ export async function GET(
         nextCursorSig,
         events: realtimeSnapshot.events,
         reasoningText: legacy.reasoningText,
+        reasoningDetailText: legacy.reasoningDetailText,
         reasoningSummaryText: legacy.reasoningSummaryText,
         text: legacy.text,
         error: {
@@ -426,6 +494,7 @@ export async function GET(
       nextCursorSig,
       events: realtimeSnapshot.events,
       reasoningText: legacy.reasoningText,
+      reasoningDetailText: legacy.reasoningDetailText,
       reasoningSummaryText: legacy.reasoningSummaryText,
       text: legacy.text,
       error: run.error || null,
@@ -543,6 +612,7 @@ export async function GET(
     nextCursorSig,
     events: allEvents,
     reasoningText: legacy.reasoningText,
+    reasoningDetailText: legacy.reasoningDetailText,
     reasoningSummaryText: legacy.reasoningSummaryText,
     text: finalText,
     artifacts: artifactItems,
