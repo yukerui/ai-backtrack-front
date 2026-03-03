@@ -438,6 +438,99 @@ async function streamFromClaudeProxy({
   let textBuffer = "";
   let reasoningStarted = false;
   let textStarted = false;
+  let lastReasoningSummarySent = "";
+
+  const SUMMARY_MAX_CHARS = 80;
+  const SUMMARY_COMMAND_OR_TECH_REGEX =
+    /\b(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh|command_execution|tool_call|tool_result|web_search|plan_update|reasoning-delta|item\.completed|item\.delta|item\.started|spawn|stdout|stderr)\b/i;
+  const SUMMARY_SHELL_TOKEN_REGEX =
+    /(?:\|\||&&|;|\||`|\$\(|\$\{|\b--[a-z0-9_-]+\b|<<<?|>>>?)/i;
+  const SUMMARY_PATH_REGEX = /(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]*/;
+  const CJK_REGEX = /[\u3400-\u9fff]/;
+
+  const clipTextByChars = (text: string, maxChars: number) => {
+    const chars = Array.from(text);
+    if (chars.length <= maxChars) {
+      return text;
+    }
+    return `${chars.slice(0, maxChars).join("")}…`;
+  };
+
+  const normalizeSummaryLine = (line: string) => {
+    return line
+      .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+      .replace(/[*_`#>~]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const collapseRepeatedChinesePhrase = (raw: string) => {
+    const value = raw.trim();
+    if (!value) {
+      return value;
+    }
+    const chars = Array.from(value);
+    const total = chars.length;
+    for (let unitLen = 1; unitLen <= Math.floor(total / 2); unitLen += 1) {
+      if (total % unitLen !== 0) {
+        continue;
+      }
+      const unit = chars.slice(0, unitLen).join("");
+      if (!CJK_REGEX.test(unit)) {
+        continue;
+      }
+      let repeated = true;
+      for (let i = unitLen; i < total; i += unitLen) {
+        if (chars.slice(i, i + unitLen).join("") !== unit) {
+          repeated = false;
+          break;
+        }
+      }
+      if (repeated) {
+        return unit;
+      }
+    }
+    return value
+      .replace(/(正在思考){2,}/g, "正在思考")
+      .replace(/(搜索中){2,}/g, "搜索中")
+      .replace(/(调用工具中){2,}/g, "调用工具中")
+      .replace(/(调用技能中){2,}/g, "调用技能中")
+      .replace(/(执行命令中){2,}/g, "执行命令中")
+      .replace(/(更新计划中){2,}/g, "更新计划中");
+  };
+
+  const sanitizeReasoningSummary = (raw: string) => {
+    const normalized = raw.replace(/\r\n/g, "\n");
+    const lines = normalized
+      .split("\n")
+      .map(normalizeSummaryLine)
+      .filter(Boolean);
+
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i];
+      if (!line) {
+        continue;
+      }
+      if (!CJK_REGEX.test(line)) {
+        continue;
+      }
+      if (SUMMARY_COMMAND_OR_TECH_REGEX.test(line)) {
+        continue;
+      }
+      if (SUMMARY_SHELL_TOKEN_REGEX.test(line)) {
+        continue;
+      }
+      if (SUMMARY_PATH_REGEX.test(line)) {
+        continue;
+      }
+      if (/^[A-Za-z0-9_.\-/:\\]+$/.test(line)) {
+        continue;
+      }
+      return clipTextByChars(collapseRepeatedChinesePhrase(line), SUMMARY_MAX_CHARS);
+    }
+
+    return "";
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -467,6 +560,7 @@ async function streamFromClaudeProxy({
           delta?: {
             content?: string | Array<{ text?: string }>;
             reasoning?: string;
+            reasoning_summary?: string;
             activity?: unknown;
           };
         }>;
@@ -493,6 +587,9 @@ async function streamFromClaudeProxy({
             : "";
       const normalizedReasoning =
         typeof reasoningDelta === "string" ? reasoningDelta : "";
+      const reasoningSummaryDelta = parsed?.choices?.[0]?.delta?.reasoning_summary;
+      const normalizedReasoningSummary =
+        typeof reasoningSummaryDelta === "string" ? reasoningSummaryDelta : "";
       const normalizedActivity = normalizeThinkingActivityDelta(
         activityDeltaRaw,
         reasoningId
@@ -519,6 +616,25 @@ async function streamFromClaudeProxy({
           id: reasoningId,
           delta: normalizedReasoning,
         });
+      }
+      if (normalizedReasoningSummary) {
+        if (!reasoningStarted) {
+          dataStream.write({ type: "reasoning-start", id: reasoningId });
+          reasoningStarted = true;
+        }
+        const sanitizedSummary = sanitizeReasoningSummary(
+          normalizedReasoningSummary
+        );
+        if (sanitizedSummary && sanitizedSummary !== lastReasoningSummarySent) {
+          dataStream.write({
+            type: "data-thinking-summary",
+            data: {
+              reasoningId,
+              text: sanitizedSummary,
+            },
+          });
+          lastReasoningSummarySent = sanitizedSummary;
+        }
       }
 
       if (textDelta) {
