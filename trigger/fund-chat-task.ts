@@ -147,11 +147,20 @@ function extractArtifactsFromText(text: string) {
   return Array.from(new Set((text.match(ARTIFACT_PATH_REGEX) || []) as string[]));
 }
 
+type RealtimeChunkAppender = (chunk: FundChatRealtimeChunk) => Promise<void>;
+
 async function appendRealtimeChunk(chunk: FundChatRealtimeChunk) {
   await fundChatRealtimeStream.append(encodeFundChatRealtimeChunk(chunk));
 }
 
-async function streamUpstreamResponse(response: Response) {
+type StreamUpstreamResponseOptions = {
+  appendRealtimeChunk?: RealtimeChunkAppender;
+};
+
+export async function streamUpstreamResponse(
+  response: Response,
+  options: StreamUpstreamResponseOptions = {}
+) {
   if (!response.body) {
     throw new Error("Upstream returned empty stream body");
   }
@@ -165,6 +174,7 @@ async function streamUpstreamResponse(response: Response) {
   let text = "";
   let textStarted = false;
   let reasoningStarted = false;
+  const appendChunk = options.appendRealtimeChunk || appendRealtimeChunk;
 
   const consumeEvent = async (eventBlock: string) => {
     const trimmedBlock = String(eventBlock || "").trim();
@@ -193,13 +203,13 @@ async function streamUpstreamResponse(response: Response) {
     const reasoningSummaryDelta = extractReasoningSummaryDelta(delta);
     if (activityDelta) {
       if (!reasoningStarted) {
-        await appendRealtimeChunk({
+        await appendChunk({
           type: "reasoning-start",
           id: reasoningPartId,
         });
         reasoningStarted = true;
       }
-      await appendRealtimeChunk({
+      await appendChunk({
         type: "thinking-activity",
         id: reasoningPartId,
         activity: activityDelta,
@@ -211,13 +221,13 @@ async function streamUpstreamResponse(response: Response) {
     }
     if (reasoningDelta) {
       if (!reasoningStarted) {
-        await appendRealtimeChunk({
+        await appendChunk({
           type: "reasoning-start",
           id: reasoningPartId,
         });
         reasoningStarted = true;
       }
-      await appendRealtimeChunk({
+      await appendChunk({
         type: "reasoning-delta",
         id: reasoningPartId,
         delta: reasoningDelta,
@@ -226,13 +236,13 @@ async function streamUpstreamResponse(response: Response) {
     }
     if (reasoningSummaryDelta) {
       if (!reasoningStarted) {
-        await appendRealtimeChunk({
+        await appendChunk({
           type: "reasoning-start",
           id: reasoningPartId,
         });
         reasoningStarted = true;
       }
-      await appendRealtimeChunk({
+      await appendChunk({
         type: "reasoning-summary-delta",
         id: reasoningPartId,
         delta: reasoningSummaryDelta,
@@ -245,13 +255,13 @@ async function streamUpstreamResponse(response: Response) {
     const textDelta = extractTextDelta(delta);
     if (textDelta) {
       if (!textStarted) {
-        await appendRealtimeChunk({
+        await appendChunk({
           type: "text-start",
           id: textPartId,
         });
         textStarted = true;
       }
-      await appendRealtimeChunk({
+      await appendChunk({
         type: "text-delta",
         id: textPartId,
         delta: textDelta,
@@ -287,8 +297,12 @@ async function streamUpstreamResponse(response: Response) {
     await consumeEvent(pending);
   }
 
+  if (!sawDone) {
+    throw new Error("Upstream stream ended before [DONE] marker");
+  }
+
   if (reasoningStarted) {
-    await appendRealtimeChunk({
+    await appendChunk({
       type: "thinking-activity",
       id: reasoningPartId,
       activity: {
@@ -297,16 +311,20 @@ async function streamUpstreamResponse(response: Response) {
         active: false,
       },
     });
-    await appendRealtimeChunk({
+    await appendChunk({
       type: "reasoning-end",
       id: reasoningPartId,
     });
   }
   if (textStarted) {
-    await appendRealtimeChunk({
+    await appendChunk({
       type: "text-end",
       id: textPartId,
     });
+  }
+
+  if (!text.trim()) {
+    throw new Error("Upstream stream completed without assistant text");
   }
 
   return text;
@@ -385,22 +403,26 @@ export const fundChatTask = schemaTask({
       upstreamTimeoutMs: UPSTREAM_TIMEOUT_MS,
       triggerTaskMaxDurationSeconds: TASK_MAX_DURATION_SECONDS,
     });
-
-    let response: Response | null = null;
-    let lastNetworkError: unknown;
+    let text = "";
+    let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
         taskDebug("upstream_request_attempt", { attempt: attempt + 1, totalAttempts: retries + 1 });
-        response = await fetch(`${base}/v1/chat/completions`, {
+        const response = await fetch(`${base}/v1/chat/completions`, {
           method: "POST",
           headers,
           body: requestBody,
           signal: requestSignal,
         });
         taskDebug("upstream_response_received", { status: response.status, ok: response.ok });
+        if (!response.ok) {
+          const details = await response.text().catch(() => "");
+          throw new Error(`Upstream failed (${response.status}): ${details || response.statusText}`);
+        }
+        text = await streamUpstreamResponse(response);
         break;
       } catch (error) {
-        lastNetworkError = error;
+        lastError = error;
         taskDebug("upstream_request_error", {
           attempt: attempt + 1,
           message: error instanceof Error ? error.message : String(error),
@@ -413,16 +435,14 @@ export const fundChatTask = schemaTask({
       }
     }
 
-    if (!response) {
-      throw new Error(buildFetchErrorMessage(base, lastNetworkError));
+    if (!text) {
+      if (lastError instanceof Error) {
+        throw lastError;
+      }
+      throw new Error(buildFetchErrorMessage(base, lastError));
     }
 
-    if (!response.ok) {
-      const details = await response.text().catch(() => "");
-      throw new Error(`Upstream failed (${response.status}): ${details || response.statusText}`);
-    }
 
-    const text = await streamUpstreamResponse(response);
     const artifacts = extractArtifactsFromText(text);
     taskDebug("task_completed", {
       textLength: text.length,
