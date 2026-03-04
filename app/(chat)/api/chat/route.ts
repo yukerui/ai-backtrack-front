@@ -58,6 +58,7 @@ import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
+import { shouldRejectByDailyQuota } from "./quota-guard";
 
 // Vercel Hobby plan limit: Serverless Function maxDuration must be <= 300s.
 export const maxDuration = 300;
@@ -735,15 +736,15 @@ export async function POST(request: Request) {
 
     const userType: UserType = session.user.type;
 
-    if (!isQuotaDisabled()) {
-      const messageCount = await getMessageCountByUserId({
-        id: session.user.id,
-        differenceInHours: 24,
-      });
+    const shouldRejectByQuota = await shouldRejectByDailyQuota({
+      disabled: isQuotaDisabled(),
+      userId: session.user.id,
+      maxMessagesPerDay: entitlementsByUserType[userType].maxMessagesPerDay,
+      getMessageCountByUserId,
+    });
 
-      if (messageCount > entitlementsByUserType[userType].maxMessagesPerDay) {
-        return new ChatSDKError("rate_limit:chat").toResponse();
-      }
+    if (shouldRejectByQuota) {
+      return new ChatSDKError("rate_limit:chat").toResponse();
     }
 
     const isToolApprovalFlow = Boolean(messages);
