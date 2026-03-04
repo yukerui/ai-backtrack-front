@@ -56,10 +56,8 @@ type TaskStatusResponse = {
   nextCursor?: number;
   nextCursorSig?: string;
   events?: TaskPollEvent[];
-  reasoningDetailText?: string;
   reasoningText?: string;
-  reasoningSummaryText?: string;
-  text?: string;
+  reasoningTitle?: string;
   artifacts?: BacktestArtifactItem[];
   plotlyCharts?: PlotlyChartPayload[];
 };
@@ -811,17 +809,11 @@ export function Chat({
         const pollEvents = normalizeTaskPollEvents(payload.events);
         if (pollEvents.length === 0) {
           const reasoningDelta =
-            typeof payload.reasoningDetailText === "string"
-              ? payload.reasoningDetailText
-              : typeof payload.reasoningText === "string"
-                ? payload.reasoningText
-              : "";
+            typeof payload.reasoningText === "string" ? payload.reasoningText : "";
           const reasoningSummaryDelta =
-            typeof payload.reasoningSummaryText === "string"
-              ? sanitizeReasoningSummary(payload.reasoningSummaryText)
+            typeof payload.reasoningTitle === "string"
+              ? sanitizeReasoningSummary(payload.reasoningTitle)
               : "";
-          const textValue =
-            typeof payload.text === "string" ? payload.text : "";
           if (reasoningDelta) {
             pollEvents.push({ type: "reasoning-delta", delta: reasoningDelta });
           }
@@ -830,13 +822,6 @@ export function Chat({
               type: "reasoning-summary-delta",
               delta: reasoningSummaryDelta,
             });
-          }
-          if (textValue) {
-            pollEvents.push(
-              payload.isCompleted
-                ? { type: "text-replace", text: textValue }
-                : { type: "text-delta", delta: textValue }
-            );
           }
           if (payload.isCompleted) {
             for (const chart of normalizePlotlyCharts(payload.plotlyCharts)) {

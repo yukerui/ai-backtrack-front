@@ -49,13 +49,6 @@ const FAILURE_STATUSES = new Set([
 
 const RUN_RETRIEVE_RETRIES = 2;
 const RUN_RETRIEVE_RETRY_DELAY_MS = 250;
-const SUMMARY_MAX_CHARS = 80;
-const SUMMARY_COMMAND_OR_TECH_REGEX =
-  /\b(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh|command_execution|tool_call|tool_result|web_search|plan_update|reasoning-delta|item\.completed|item\.delta|item\.started|spawn|stdout|stderr)\b/i;
-const SUMMARY_SHELL_TOKEN_REGEX =
-  /(?:\|\||&&|;|\||`|\$\(|\$\{|\b--[a-z0-9_-]+\b|<<<?|>>>?)/i;
-const SUMMARY_PATH_REGEX = /(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]*/;
-const CJK_REGEX = /[\u3400-\u9fff]/;
 
 type TaskPollEvent =
   | { type: "reasoning-delta"; id?: string; delta: string }
@@ -65,6 +58,23 @@ type TaskPollEvent =
   | { type: "text-replace"; text: string }
   | { type: "plotly-spec"; chart: PlotlyChartPayload }
   | { type: "artifact-items"; items: BacktestArtifactItem[] };
+
+function mapReasoningTitleFromItemType(itemType: string) {
+  const normalized = String(itemType || "").toLowerCase().trim();
+  if (normalized === "command_execution") {
+    return "执行 shell 命令";
+  }
+  if (normalized === "web_search" || normalized === "web_fetch") {
+    return "调用网络搜索中";
+  }
+  if (normalized === "file_write" || normalized === "file_change") {
+    return "写文件";
+  }
+  if (normalized === "file_read") {
+    return "读文件";
+  }
+  return "";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -144,87 +154,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function clipTextByChars(text: string, maxChars: number) {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) {
-    return text;
-  }
-  return `${chars.slice(0, maxChars).join("")}…`;
-}
-
-function normalizeSummaryLine(line: string) {
-  return line
-    .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
-    .replace(/[*_`#>~]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function sanitizeSummaryText(raw: string) {
-  const normalized = raw.replace(/\r\n/g, "\n");
-  const lines = normalized
-    .split("\n")
-    .map(normalizeSummaryLine)
-    .filter(Boolean);
-
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (!line) {
-      continue;
-    }
-    if (!CJK_REGEX.test(line)) {
-      continue;
-    }
-    if (isCommandLikeReasoningLine(line)) {
-      continue;
-    }
-    if (SUMMARY_COMMAND_OR_TECH_REGEX.test(line)) {
-      continue;
-    }
-    if (SUMMARY_SHELL_TOKEN_REGEX.test(line)) {
-      continue;
-    }
-    if (SUMMARY_PATH_REGEX.test(line)) {
-      continue;
-    }
-    if (/^[A-Za-z0-9_.\-/:\\]+$/.test(line)) {
-      continue;
-    }
-    return clipTextByChars(line, SUMMARY_MAX_CHARS);
-  }
-
-  return "";
-}
-
-function isCommandLikeReasoningLine(line: string) {
-  const value = line.trim();
-  if (!value) {
-    return false;
-  }
-  if (/^\[blocked\]/i.test(value)) {
-    return true;
-  }
-  return /^(?:\$?\s*)?(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh)\b/i.test(
-    value
-  );
-}
-
-function deriveSummaryFallbackFromReasoning(reasoningText: string) {
-  const summary = sanitizeSummaryText(reasoningText);
-  return summary || "正在思考";
-}
-
-function getReasoningSummaryDeltaFromChunk(chunk: FundChatRealtimeChunk) {
-  const candidate = chunk as { type?: unknown; delta?: unknown };
-  if (
-    candidate.type === "reasoning-summary-delta" &&
-    typeof candidate.delta === "string"
-  ) {
-    return candidate.delta;
-  }
-  return "";
-}
-
 async function retrieveRunWithRetry(runId: string) {
   let lastError: unknown;
   for (let attempt = 0; attempt <= RUN_RETRIEVE_RETRIES; attempt += 1) {
@@ -263,29 +192,14 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
   }
 
   const events: TaskPollEvent[] = [];
-  const reasoningDeltaPieces: string[] = [];
-  let sawReasoningSummary = false;
-  let sawThinkingActivity = false;
-  let latestSummary = "";
-  let latestActivitySummary = "";
+  let latestReasoningTitle = "";
 
   for (const chunk of chunks) {
     if (chunk.type === "reasoning-delta") {
       events.push({ type: "reasoning-delta", id: chunk.id, delta: chunk.delta });
-      reasoningDeltaPieces.push(chunk.delta);
-      continue;
-    }
-    const reasoningSummaryDelta = getReasoningSummaryDeltaFromChunk(chunk);
-    if (reasoningSummaryDelta) {
-      sawReasoningSummary = true;
-      const sanitizedSummary = sanitizeSummaryText(reasoningSummaryDelta);
-      if (sanitizedSummary) {
-        latestSummary = sanitizedSummary;
-      }
       continue;
     }
     if (chunk.type === "thinking-activity") {
-      sawThinkingActivity = true;
       events.push({
         type: "thinking-activity",
         activity: {
@@ -297,9 +211,9 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
           ...(chunk.activity.itemType ? { itemType: chunk.activity.itemType } : {}),
         },
       });
-      const sanitizedActivitySummary = sanitizeSummaryText(chunk.activity.label);
-      if (sanitizedActivitySummary) {
-        latestActivitySummary = sanitizedActivitySummary;
+      const title = mapReasoningTitleFromItemType(chunk.activity.itemType || "");
+      if (title) {
+        latestReasoningTitle = title;
       }
       continue;
     }
@@ -308,19 +222,10 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
     }
   }
 
-  if (!latestSummary && reasoningDeltaPieces.length > 0) {
-    latestSummary = deriveSummaryFallbackFromReasoning(reasoningDeltaPieces.join(""));
-  }
-  if (!latestSummary && latestActivitySummary) {
-    latestSummary = latestActivitySummary;
-  }
-  if (!latestSummary && (sawReasoningSummary || sawThinkingActivity)) {
-    latestSummary = "正在思考";
-  }
-  if (latestSummary) {
+  if (latestReasoningTitle) {
     events.push({
       type: "reasoning-summary-delta",
-      delta: latestSummary,
+      delta: latestReasoningTitle,
     });
   }
 
@@ -329,32 +234,28 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
 
 function toLegacyDeltaText(events: TaskPollEvent[]) {
   let reasoningText = "";
-  let reasoningSummaryText = "";
-  let text = "";
+  let reasoningTitle = "";
   for (const event of events) {
     if (event.type === "reasoning-delta") {
       reasoningText += event.delta;
       continue;
     }
     if (event.type === "reasoning-summary-delta") {
-      const sanitizedSummary = sanitizeSummaryText(event.delta);
-      if (sanitizedSummary) {
-        reasoningSummaryText = sanitizedSummary;
+      if (typeof event.delta === "string" && event.delta.trim()) {
+        reasoningTitle = event.delta.trim();
       }
       continue;
     }
-    if (event.type === "text-delta") {
-      text += event.delta;
+    if (event.type === "thinking-activity") {
+      const title = mapReasoningTitleFromItemType(event.activity.itemType || "");
+      if (title) {
+        reasoningTitle = title;
+      }
     }
-  }
-  if (!reasoningSummaryText && reasoningText) {
-    reasoningSummaryText = deriveSummaryFallbackFromReasoning(reasoningText);
   }
   return {
     reasoningText,
-    reasoningDetailText: reasoningText,
-    reasoningSummaryText,
-    text,
+    reasoningTitle,
   };
 }
 
@@ -447,9 +348,7 @@ export async function GET(
         nextCursorSig,
         events: realtimeSnapshot.events,
         reasoningText: legacy.reasoningText,
-        reasoningDetailText: legacy.reasoningDetailText,
-        reasoningSummaryText: legacy.reasoningSummaryText,
-        text: legacy.text,
+        reasoningTitle: legacy.reasoningTitle,
         error: {
           message,
           transient: true,
@@ -466,9 +365,7 @@ export async function GET(
         nextCursorSig,
         events: realtimeSnapshot.events,
         reasoningText: legacy.reasoningText,
-        reasoningDetailText: legacy.reasoningDetailText,
-        reasoningSummaryText: legacy.reasoningSummaryText,
-        text: legacy.text,
+        reasoningTitle: legacy.reasoningTitle,
         error: {
           message,
           transient: true,
@@ -494,9 +391,7 @@ export async function GET(
       nextCursorSig,
       events: realtimeSnapshot.events,
       reasoningText: legacy.reasoningText,
-      reasoningDetailText: legacy.reasoningDetailText,
-      reasoningSummaryText: legacy.reasoningSummaryText,
-      text: legacy.text,
+      reasoningTitle: legacy.reasoningTitle,
       error: run.error || null,
     });
   }
@@ -612,9 +507,7 @@ export async function GET(
     nextCursorSig,
     events: allEvents,
     reasoningText: legacy.reasoningText,
-    reasoningDetailText: legacy.reasoningDetailText,
-    reasoningSummaryText: legacy.reasoningSummaryText,
-    text: finalText,
+    reasoningTitle: legacy.reasoningTitle,
     artifacts: artifactItems,
     plotlyCharts,
   });
