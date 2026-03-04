@@ -6,6 +6,12 @@ import {
   fundChatRealtimeStream,
   type FundChatRealtimeChunk,
 } from "./streams";
+import {
+  extractReasoningDelta,
+  extractReasoningSummaryDelta,
+  extractTextDelta,
+  parseUpstreamDeltaPayload,
+} from "./upstream-sse-parser";
 
 const payloadSchema = z.object({
   userId: z.string(),
@@ -97,49 +103,6 @@ function buildFetchErrorMessage(base: string, error: unknown) {
   return `Upstream fetch failed (${base}/v1/chat/completions): ${prefix}${message}`;
 }
 
-type UpstreamDeltaPayload = {
-  choices?: Array<{
-    delta?: UpstreamChoiceDelta;
-  }>;
-  error?: {
-    message?: string;
-  };
-};
-
-type UpstreamChoiceDelta = {
-  content?: string | Array<{ text?: string }>;
-  reasoning?: string;
-  activity?: unknown;
-};
-
-function extractSsePayload(eventBlock: string) {
-  const lines = eventBlock.split(/\r?\n/);
-  const dataLines = lines
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim());
-  if (dataLines.length === 0) {
-    return "";
-  }
-  return dataLines.join("\n").trim();
-}
-
-function extractTextDelta(delta: UpstreamChoiceDelta | undefined) {
-  const content = delta?.content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .map((part) => (typeof part?.text === "string" ? part.text : ""))
-    .join("");
-}
-
-function extractReasoningDelta(delta: UpstreamChoiceDelta | undefined) {
-  return typeof delta?.reasoning === "string" ? delta.reasoning : "";
-}
-
 function normalizeThinkingActivityDelta(value: unknown) {
   if (!value || typeof value !== "object") {
     return null;
@@ -204,20 +167,17 @@ async function streamUpstreamResponse(response: Response) {
   let reasoningStarted = false;
 
   const consumeEvent = async (eventBlock: string) => {
-    const payload = extractSsePayload(eventBlock);
-    if (!payload) {
-      return;
-    }
-    if (payload === "[DONE]") {
-      sawDone = true;
-      taskDebug("sse_done_marker_received");
+    const trimmedBlock = String(eventBlock || "").trim();
+    if (!trimmedBlock) {
       return;
     }
 
-    let parsed: UpstreamDeltaPayload | null = null;
-    try {
-      parsed = JSON.parse(payload) as UpstreamDeltaPayload;
-    } catch {
+    const parsed = parseUpstreamDeltaPayload(eventBlock);
+    if (!parsed) {
+      if (/\bdata:\s*\[DONE\]\s*$/m.test(trimmedBlock)) {
+        sawDone = true;
+        taskDebug("sse_done_marker_received");
+      }
       return;
     }
 
@@ -230,6 +190,7 @@ async function streamUpstreamResponse(response: Response) {
     const delta = parsed?.choices?.[0]?.delta;
     const activityDelta = normalizeThinkingActivityDelta(delta?.activity);
     const reasoningDelta = extractReasoningDelta(delta);
+    const reasoningSummaryDelta = extractReasoningSummaryDelta(delta);
     if (activityDelta) {
       if (!reasoningStarted) {
         await appendRealtimeChunk({
@@ -262,6 +223,23 @@ async function streamUpstreamResponse(response: Response) {
         delta: reasoningDelta,
       });
       taskDebug("reasoning_delta", { deltaLength: reasoningDelta.length });
+    }
+    if (reasoningSummaryDelta) {
+      if (!reasoningStarted) {
+        await appendRealtimeChunk({
+          type: "reasoning-start",
+          id: reasoningPartId,
+        });
+        reasoningStarted = true;
+      }
+      await appendRealtimeChunk({
+        type: "reasoning-summary-delta",
+        id: reasoningPartId,
+        delta: reasoningSummaryDelta,
+      });
+      taskDebug("reasoning_summary_delta", {
+        deltaLength: reasoningSummaryDelta.length,
+      });
     }
 
     const textDelta = extractTextDelta(delta);
