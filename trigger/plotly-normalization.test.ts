@@ -37,3 +37,35 @@ test("decodes Plotly typed-array payload so descending-time chart is drawable", 
   assert.deepEqual(trace.x, ["2026-03-03", "2026-03-02", "2026-03-01"]);
   assert.deepEqual(trace.y, expectedY);
 });
+
+test("extracts chart when JSON wraps it under top-level plotly field", () => {
+  const expectedY = [0.31, 0.27, 0.19];
+  const raw = JSON.stringify({
+    summary: {
+      symbol: "159509",
+      note: "最近两年任意买点收益，左新右旧",
+    },
+    plotly: {
+      id: "buy-return-159509-wrapper",
+      data: [
+        {
+          type: "scatter",
+          mode: "lines",
+          x: ["2026-03-03", "2026-03-02", "2026-03-01"],
+          y: {
+            dtype: "f8",
+            bdata: encodeFloat64(expectedY),
+          },
+        },
+      ],
+      layout: { xaxis: { title: "买入日期（左新右旧）" } },
+      config: { responsive: true },
+    },
+  });
+
+  const { charts, text } = extractPlotlyChartsFromText(raw, "plotly");
+  assert.equal(text, "");
+  assert.equal(charts.length, 1);
+  const trace = charts[0].data[0] as { y?: unknown };
+  assert.deepEqual(trace.y, expectedY);
+});

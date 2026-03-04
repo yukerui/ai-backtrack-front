@@ -237,11 +237,20 @@ function normalizeChartCandidates(input: unknown, idPrefix: string): PlotlyChart
   if (Array.isArray(input)) {
     candidates.push(...input);
   } else if (isObject(input)) {
+    let hasExplicitChartField = false;
     if (Array.isArray(input.plotlyCharts)) {
       candidates.push(...input.plotlyCharts);
-    } else if (isObject(input.chart)) {
+      hasExplicitChartField = true;
+    }
+    if (isObject(input.chart)) {
       candidates.push(input.chart);
-    } else {
+      hasExplicitChartField = true;
+    }
+    if (isObject(input.plotly)) {
+      candidates.push(input.plotly);
+      hasExplicitChartField = true;
+    }
+    if (!hasExplicitChartField) {
       candidates.push(input);
     }
   }
