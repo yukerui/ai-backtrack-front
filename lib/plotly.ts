@@ -17,6 +17,17 @@ const PLOTLY_BLOCK_REGEX = /```(?:plotly-json|plotly|json)\s*([\s\S]*?)```/gi;
 const MAX_TRACES = 24;
 const MAX_TRACE_POINTS = 12000;
 const MAX_TOTAL_POINTS = 120000;
+const TRACE_SERIES_KEYS = ["x", "y", "z", "open", "high", "low", "close"] as const;
+
+type TypedArrayCtor =
+  | Float64ArrayConstructor
+  | Float32ArrayConstructor
+  | Int32ArrayConstructor
+  | Uint32ArrayConstructor
+  | Int16ArrayConstructor
+  | Uint16ArrayConstructor
+  | Int8ArrayConstructor
+  | Uint8ArrayConstructor;
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -28,6 +39,77 @@ function safeJsonClone<T>(value: T): T {
   } catch {
     return value;
   }
+}
+
+function normalizeDtype(dtype: string): string {
+  return dtype.trim().toLowerCase().replace(/^</, "");
+}
+
+function getTypedArrayCtor(dtype: string): TypedArrayCtor | null {
+  switch (normalizeDtype(dtype)) {
+    case "f8":
+    case "float64":
+      return Float64Array;
+    case "f4":
+    case "float32":
+      return Float32Array;
+    case "i4":
+    case "int32":
+      return Int32Array;
+    case "u4":
+    case "uint32":
+      return Uint32Array;
+    case "i2":
+    case "int16":
+      return Int16Array;
+    case "u2":
+    case "uint16":
+      return Uint16Array;
+    case "i1":
+    case "int8":
+      return Int8Array;
+    case "u1":
+    case "uint8":
+      return Uint8Array;
+    default:
+      return null;
+  }
+}
+
+function decodeTypedArrayPayload(value: unknown): unknown {
+  if (!isObject(value)) {
+    return value;
+  }
+  const dtype = typeof value.dtype === "string" ? value.dtype : "";
+  const bdata = typeof value.bdata === "string" ? value.bdata : "";
+  if (!dtype || !bdata) {
+    return value;
+  }
+  const ctor = getTypedArrayCtor(dtype);
+  if (!ctor) {
+    return value;
+  }
+
+  try {
+    const bytes = Buffer.from(bdata, "base64");
+    if (bytes.byteLength === 0 || bytes.byteLength % ctor.BYTES_PER_ELEMENT !== 0) {
+      return value;
+    }
+    const raw = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    return Array.from(new ctor(raw));
+  } catch {
+    return value;
+  }
+}
+
+function normalizeTraceSeries(trace: JsonObject): JsonObject {
+  const normalized = safeJsonClone(trace);
+  for (const key of TRACE_SERIES_KEYS) {
+    if (key in normalized) {
+      normalized[key] = decodeTypedArrayPayload(normalized[key]);
+    }
+  }
+  return normalized;
 }
 
 function normalizeTitle(value: unknown, layout?: JsonObject): string {
@@ -48,7 +130,7 @@ function normalizeTitle(value: unknown, layout?: JsonObject): string {
 }
 
 function getTracePointCount(trace: JsonObject): number {
-  for (const key of ["x", "y", "z", "open", "high", "low", "close"]) {
+  for (const key of TRACE_SERIES_KEYS) {
     const value = trace[key];
     if (Array.isArray(value)) {
       return value.length;
@@ -109,7 +191,9 @@ function normalizeChart(
   }
 
   const data = Array.isArray(candidate.data)
-    ? candidate.data.filter((trace) => isObject(trace)).map((trace) => safeJsonClone(trace))
+    ? candidate.data
+        .filter((trace) => isObject(trace))
+        .map((trace) => normalizeTraceSeries(trace))
     : [];
   if (!data.length || data.length > MAX_TRACES) {
     return null;
