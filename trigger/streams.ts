@@ -3,6 +3,7 @@ import { streams } from "@trigger.dev/sdk";
 export type FundChatRealtimeChunk =
   | { type: "reasoning-start"; id: string }
   | { type: "reasoning-delta"; id: string; delta: string }
+  | { type: "reasoning-summary-delta"; id: string; delta: string }
   | { type: "reasoning-end"; id: string }
   | {
       type: "thinking-activity";
@@ -60,7 +61,9 @@ export function decodeFundChatRealtimeChunk(raw: unknown): FundChatRealtimeChunk
   }
 
   if (
-    (parsed.type === "reasoning-delta" || parsed.type === "text-delta") &&
+    (parsed.type === "reasoning-delta" ||
+      parsed.type === "reasoning-summary-delta" ||
+      parsed.type === "text-delta") &&
     typeof parsed.delta === "string"
   ) {
     return { type: parsed.type, id: parsed.id, delta: parsed.delta };
