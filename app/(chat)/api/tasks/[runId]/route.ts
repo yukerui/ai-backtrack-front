@@ -61,19 +61,22 @@ type TaskPollEvent =
 
 function mapReasoningTitleFromItemType(itemType: string) {
   const normalized = String(itemType || "").toLowerCase().trim();
+  if (normalized === "reasoning") {
+    return "正在思考";
+  }
   if (normalized === "command_execution") {
     return "执行 shell 命令";
   }
   if (normalized === "web_search" || normalized === "web_fetch") {
     return "调用网络搜索中";
   }
-  if (normalized === "file_write" || normalized === "file_change") {
+  if (normalized === "file_write") {
     return "写文件";
   }
   if (normalized === "file_read") {
     return "读文件";
   }
-  return "";
+  return "正在思考";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -193,6 +196,7 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
 
   const events: TaskPollEvent[] = [];
   let latestReasoningTitle = "";
+  let latestNonThinkingReasoningTitle = "";
 
   for (const chunk of chunks) {
     if (chunk.type === "reasoning-delta") {
@@ -214,6 +218,9 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
       const title = mapReasoningTitleFromItemType(chunk.activity.itemType || "");
       if (title) {
         latestReasoningTitle = title;
+        if (title !== "正在思考") {
+          latestNonThinkingReasoningTitle = title;
+        }
       }
       continue;
     }
@@ -222,10 +229,10 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
     }
   }
 
-  if (latestReasoningTitle) {
+  if (latestNonThinkingReasoningTitle || latestReasoningTitle) {
     events.push({
       type: "reasoning-summary-delta",
-      delta: latestReasoningTitle,
+      delta: latestNonThinkingReasoningTitle || latestReasoningTitle,
     });
   }
 
@@ -235,6 +242,7 @@ async function readRealtimeSnapshot(runId: string, cursor: number) {
 function toLegacyDeltaText(events: TaskPollEvent[]) {
   let reasoningText = "";
   let reasoningTitle = "";
+  let latestNonThinkingReasoningTitle = "";
   for (const event of events) {
     if (event.type === "reasoning-delta") {
       reasoningText += event.delta;
@@ -250,12 +258,15 @@ function toLegacyDeltaText(events: TaskPollEvent[]) {
       const title = mapReasoningTitleFromItemType(event.activity.itemType || "");
       if (title) {
         reasoningTitle = title;
+        if (title !== "正在思考") {
+          latestNonThinkingReasoningTitle = title;
+        }
       }
     }
   }
   return {
     reasoningText,
-    reasoningTitle,
+    reasoningTitle: latestNonThinkingReasoningTitle || reasoningTitle,
   };
 }
 

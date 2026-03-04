@@ -49,6 +49,23 @@ const SUMMARY_SHELL_TOKEN_REGEX =
 const SUMMARY_PATH_REGEX = /(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]*/;
 const CJK_REGEX = /[\u3400-\u9fff]/;
 
+function mapReasoningTitleFromItemType(itemType: string) {
+  const normalized = String(itemType || "").toLowerCase().trim();
+  if (normalized === "command_execution") {
+    return "执行 shell 命令";
+  }
+  if (normalized === "web_search" || normalized === "web_fetch") {
+    return "调用网络搜索中";
+  }
+  if (normalized === "file_write") {
+    return "写文件";
+  }
+  if (normalized === "file_read") {
+    return "读文件";
+  }
+  return "正在思考";
+}
+
 type TaskStatusResponse = {
   status: string;
   isCompleted: boolean;
@@ -858,6 +875,7 @@ export function Chat({
               let artifactItems = extractExistingArtifactItems(msg);
               let thinkingActivity = extractExistingThinkingActivity(msg);
               let sawThinkingActivityEvent = false;
+              let latestNonThinkingReasoningTitle = "";
 
               for (const event of pollEvents) {
                 if (event.type === "reasoning-delta") {
@@ -873,7 +891,19 @@ export function Chat({
                 }
                 if (event.type === "thinking-activity") {
                   sawThinkingActivityEvent = true;
-                  thinkingActivity = event.activity;
+                  const mappedTitle = mapReasoningTitleFromItemType(
+                    event.activity.itemType || ""
+                  );
+                  if (mappedTitle && mappedTitle !== "正在思考") {
+                    latestNonThinkingReasoningTitle = mappedTitle;
+                  }
+                  if (event.activity.active) {
+                    // Prefer currently active activity over passive updates
+                    // in the same polling window.
+                    thinkingActivity = event.activity;
+                  } else if (!thinkingActivity || !thinkingActivity.active) {
+                    thinkingActivity = event.activity;
+                  }
                   continue;
                 }
                 if (event.type === "text-delta") {
@@ -890,6 +920,14 @@ export function Chat({
                 }
                 if (event.type === "artifact-items") {
                   artifactItems = event.items;
+                }
+              }
+              if (latestNonThinkingReasoningTitle) {
+                const mappedSummary = sanitizeReasoningSummary(
+                  latestNonThinkingReasoningTitle
+                );
+                if (mappedSummary) {
+                  nextReasoningSummary = mappedSummary;
                 }
               }
 
