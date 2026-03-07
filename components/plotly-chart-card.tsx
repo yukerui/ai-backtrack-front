@@ -50,14 +50,16 @@ export function PlotlyChartCard({ chart }: { chart: PlotlyChartPayload }) {
   return (
     <div className="w-full rounded-xl border bg-card p-3 sm:p-4">
       <div className="mb-2 font-medium text-sm">{chart.title || "交互图表"}</div>
-      <div className="h-[340px] w-full md:h-[460px]">
-        <Plot
-          config={normalizeConfig(chart)}
-          data={chart.data}
-          layout={normalizeLayout(chart)}
-          style={{ width: "100%", height: "100%" }}
-          useResizeHandler={true}
-        />
+      <div className="overflow-x-auto">
+        <div className="h-[340px] min-w-[560px] w-full md:h-[460px] md:min-w-0">
+          <Plot
+            config={normalizeConfig(chart)}
+            data={chart.data}
+            layout={normalizeLayout(chart)}
+            style={{ width: "100%", height: "100%" }}
+            useResizeHandler={true}
+          />
+        </div>
       </div>
     </div>
   );
