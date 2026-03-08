@@ -48,6 +48,10 @@ import {
   normalizeRealtimeError,
 } from "@/lib/realtime-log";
 import {
+  DEFAULT_TRIGGER_REALTIME_TIMEOUT_SECONDS,
+  normalizeRealtimeTimeoutSeconds,
+} from "@/lib/realtime-timeout";
+import {
   getTaskRunMessageId,
   getTaskOwnerTtlSeconds,
   hashTaskSessionId,
@@ -80,13 +84,10 @@ const TRIGGER_REALTIME_API_URL =
   process.env.TRIGGER_API_URL || "https://api.trigger.dev";
 const TRIGGER_REALTIME_PUBLIC_TOKEN_TTL =
   process.env.TRIGGER_REALTIME_PUBLIC_TOKEN_TTL || "30m";
-const TRIGGER_REALTIME_READ_TIMEOUT_SECONDS = (() => {
-  const parsed = Number.parseInt(
-    process.env.TRIGGER_STREAM_READ_TIMEOUT_SECONDS || "1800",
-    10
-  );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1800;
-})();
+const TRIGGER_REALTIME_READ_TIMEOUT_SECONDS = normalizeRealtimeTimeoutSeconds(
+  process.env.TRIGGER_STREAM_READ_TIMEOUT_SECONDS,
+  DEFAULT_TRIGGER_REALTIME_TIMEOUT_SECONDS
+);
 
 function getStreamContext() {
   try {
