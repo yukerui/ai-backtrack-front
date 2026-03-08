@@ -755,13 +755,10 @@ export function Chat({
 
   const [input, setInput] = useState<string>("");
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
-  const [turnstileToken, setTurnstileToken] = useState("");
-  const [turnstileResetNonce, setTurnstileResetNonce] = useState(0);
   const [realtimeIssue, setRealtimeIssue] = useState<{
     runId: string;
     message: string;
   } | null>(null);
-  const hadInFlightRequestRef = useRef(false);
   const pollingRunIdsRef = useRef<Set<string>>(new Set());
   const pollingTimersRef = useRef<Map<string, number>>(new Map());
   const pollingMessageIdsRef = useRef<Map<string, string>>(new Map());
@@ -783,8 +780,6 @@ export function Chat({
   const setMessagesRef = useRef<SetChatMessages | null>(null);
   const hasRecoveredWatchdogRef = useRef(false);
   const unmountedRef = useRef(false);
-  const turnstileTokenRef = useRef("");
-  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
 
   useEffect(() => {
     return () => {
@@ -815,19 +810,6 @@ export function Chat({
       pendingTaskMetaRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    turnstileTokenRef.current = turnstileToken;
-    if (typeof document !== "undefined") {
-      if (turnstileToken) {
-        document.cookie = `turnstile_token=${encodeURIComponent(
-          turnstileToken
-        )}; Path=/; SameSite=Lax`;
-      } else {
-        document.cookie = "turnstile_token=; Path=/; Max-Age=0; SameSite=Lax";
-      }
-    }
-  }, [turnstileToken]);
 
   const stopPollingRun = (runId: string) => {
     if (!runId) {
@@ -1549,17 +1531,7 @@ export function Chat({
     transport: new DefaultChatTransport({
       api: "/api/chat",
       fetch: fetchWithErrorHandlers,
-      headers: () => {
-        const token = (turnstileTokenRef.current || "").trim();
-        const headers: Record<string, string> = {};
-        if (token) {
-          headers["x-turnstile-token"] = token;
-          headers["cf-turnstile-response"] = token;
-        }
-        return headers;
-      },
       prepareSendMessagesRequest(request) {
-        const token = (turnstileTokenRef.current || "").trim();
         const lastMessage = request.messages.at(-1);
         const isToolApprovalContinuation =
           lastMessage?.role !== "user" ||
@@ -1573,19 +1545,12 @@ export function Chat({
           );
 
         return {
-          headers: token
-            ? {
-                "x-turnstile-token": token,
-                "cf-turnstile-response": token,
-              }
-            : undefined,
           body: {
             id: request.id,
             ...(isToolApprovalContinuation
               ? { messages: request.messages }
               : { message: lastMessage }),
             selectedVisibilityType: visibilityType,
-            ...(token ? { turnstileToken: token } : {}),
             ...request.body,
           },
         };
@@ -1696,27 +1661,7 @@ export function Chat({
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
   useEffect(() => {
-    if (status === "submitted" || status === "streaming") {
-      hadInFlightRequestRef.current = true;
-      return;
-    }
-
-    if (!hadInFlightRequestRef.current) {
-      return;
-    }
-
-    if (status === "ready" || status === "error") {
-      setTurnstileToken("");
-      setTurnstileResetNonce((x) => x + 1);
-      hadInFlightRequestRef.current = false;
-    }
-  }, [status]);
-
-  useEffect(() => {
     if (query && !hasAppendedQuery) {
-      if (turnstileSiteKey && !(turnstileTokenRef.current || "").trim()) {
-        return;
-      }
       sendMessage({
         role: "user" as const,
         parts: [{ type: "text", text: query }],
@@ -1730,8 +1675,6 @@ export function Chat({
     sendMessage,
     hasAppendedQuery,
     id,
-    turnstileSiteKey,
-    turnstileToken,
   ]);
 
   useEffect(() => {
@@ -1911,7 +1854,6 @@ export function Chat({
               chatId={id}
               input={input}
               messages={messages}
-              onTurnstileTokenChange={setTurnstileToken}
               selectedVisibilityType={visibilityType}
               sendMessage={sendMessage}
               setAttachments={setAttachments}
@@ -1919,9 +1861,6 @@ export function Chat({
               setMessages={setMessages}
               status={status}
               stop={stop}
-              turnstileResetNonce={turnstileResetNonce}
-              turnstileSiteKey={turnstileSiteKey}
-              turnstileToken={turnstileToken}
             />
           )}
         </div>
@@ -1934,7 +1873,6 @@ export function Chat({
         input={input}
         isReadonly={isReadonly}
         messages={messages}
-        onTurnstileTokenChange={setTurnstileToken}
         regenerate={regenerate}
         selectedVisibilityType={visibilityType}
         sendMessage={sendMessage}
@@ -1943,9 +1881,6 @@ export function Chat({
         setMessages={setMessages}
         status={status}
         stop={stop}
-        turnstileResetNonce={turnstileResetNonce}
-        turnstileSiteKey={turnstileSiteKey}
-        turnstileToken={turnstileToken}
         votes={votes}
       />
 

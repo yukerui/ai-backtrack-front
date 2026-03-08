@@ -897,7 +897,7 @@ export async function POST(request: Request) {
       isToolApprovalFlow,
       hasTurnstileToken: Boolean(turnstileToken),
     });
-    if (backend === "claude_proxy" && !turnstileToken) {
+    if (backend === "claude_proxy" && !USE_TRIGGER_DEV && !turnstileToken) {
       return Response.json(
         {
           code: "forbidden:chat",
