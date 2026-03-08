@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   PlotlyChartPayload,
   ThinkingActivityPayload,
+  ThinkingSummaryPayload,
 } from "@/lib/types";
 import { cn, linkifyUrlsAsMarkdown, sanitizeText } from "@/lib/utils";
 import { BacktestArtifactCard } from "./backtest-artifact-card";
@@ -120,6 +121,20 @@ function normalizeThinkingActivity(value: unknown): ThinkingActivityPayload | nu
   };
 }
 
+function normalizeThinkingSummary(value: unknown): ThinkingSummaryPayload | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<ThinkingSummaryPayload>;
+  const reasoningId =
+    typeof candidate.reasoningId === "string" ? candidate.reasoningId.trim() : "";
+  const text = typeof candidate.text === "string" ? candidate.text.trim() : "";
+  if (!reasoningId || !text) {
+    return null;
+  }
+  return { reasoningId, text };
+}
+
 const PurePreviewMessage = ({
   addToolApprovalResponse,
   chatId,
@@ -157,6 +172,16 @@ const PurePreviewMessage = ({
   const latestThinkingActivity =
     thinkingActivities.length > 0
       ? thinkingActivities[thinkingActivities.length - 1]
+      : null;
+  const thinkingSummaries = message.parts
+    .filter((part) => part.type === "data-thinking-summary")
+    .map((part) =>
+      normalizeThinkingSummary((part as { data?: unknown }).data)
+    )
+    .filter((summary): summary is ThinkingSummaryPayload => Boolean(summary));
+  const latestThinkingSummary =
+    thinkingSummaries.length > 0
+      ? thinkingSummaries[thinkingSummaries.length - 1]
       : null;
 
   useDataStream();
@@ -238,8 +263,19 @@ const PurePreviewMessage = ({
                       .find((activity) => activity.reasoningId === reasoningId) ||
                     latestThinkingActivity
                   : latestThinkingActivity;
+              const summaryForReasoning =
+                reasoningId
+                  ? thinkingSummaries
+                      .slice()
+                      .reverse()
+                      .find((summary) => summary.reasoningId === reasoningId)
+                      ?.text || latestThinkingSummary?.text || ""
+                  : latestThinkingSummary?.text || "";
               const shouldShowReasoning =
-                hasContent || isStreaming || Boolean(activityForReasoning);
+                hasContent ||
+                isStreaming ||
+                Boolean(activityForReasoning) ||
+                Boolean(summaryForReasoning);
               if (shouldShowReasoning) {
                 return (
                   <MessageReasoning
@@ -248,6 +284,7 @@ const PurePreviewMessage = ({
                     key={key}
                     reasoning={part.text || ""}
                     reasoningId={reasoningId}
+                    summary={summaryForReasoning}
                   />
                 );
               }

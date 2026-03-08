@@ -27,6 +27,11 @@ export type ThinkingActivityPayload = {
   itemType?: string;
 };
 
+export type ThinkingSummaryPayload = {
+  reasoningId: string;
+  text: string;
+};
+
 export const messageMetadataSchema = z.object({
   createdAt: z.string(),
 });
@@ -64,6 +69,12 @@ export type CustomUIDataTypes = {
     runId: string;
     cursor: number;
     cursorSig: string;
+    realtime?: {
+      apiUrl: string;
+      publicAccessToken: string;
+      streamId: string;
+      readTimeoutSeconds?: number;
+    };
   };
   "backtest-artifact": {
     items: BacktestArtifactItem[];
@@ -72,6 +83,7 @@ export type CustomUIDataTypes = {
     chart: PlotlyChartPayload;
   };
   "thinking-activity": ThinkingActivityPayload;
+  "thinking-summary": ThinkingSummaryPayload;
 };
 
 export type ChatMessage = UIMessage<

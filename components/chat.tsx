@@ -4,6 +4,11 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  configure as configureTriggerClient,
+  runs as triggerRuns,
+  streams as triggerStreams,
+} from "@trigger.dev/sdk/v3";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -41,6 +46,9 @@ import type { VisibilityType } from "./visibility-selector";
 const TASK_AUTH_PATTERN =
   "\\[\\[task-auth:([A-Za-z0-9_-]+):([0-9]+):([A-Za-z0-9._-]+)\\]\\]";
 const TASK_POLL_INTERVAL_MS = 2000;
+const DEFAULT_TRIGGER_REALTIME_API_URL = "https://api.trigger.dev";
+const DEFAULT_TRIGGER_STREAM_ID = "fund-chat-realtime";
+const DEFAULT_TRIGGER_STREAM_TIMEOUT_SECONDS = 60;
 const SUMMARY_MAX_CHARS = 18;
 const SUMMARY_COMMAND_OR_TECH_REGEX =
   /\b(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh|command_execution|tool_call|tool_result|web_search|plan_update|reasoning-delta|item\.completed|item\.delta|item\.started|spawn|stdout|stderr)\b/i;
@@ -94,14 +102,42 @@ type TaskPollingMeta = {
   cursorSig: string;
 };
 
+type TaskRealtimeMeta = {
+  apiUrl: string;
+  publicAccessToken: string;
+  streamId: string;
+  readTimeoutSeconds: number;
+};
+
+type TaskRuntimeMeta = TaskPollingMeta & {
+  realtime: TaskRealtimeMeta | null;
+};
+
 type DataTaskAuthPart = {
   type: "data-task-auth";
   data?: {
     runId?: unknown;
     cursor?: unknown;
     cursorSig?: unknown;
+    realtime?: unknown;
   };
 };
+
+type RealtimeChunk =
+  | { type: "reasoning-delta"; id?: string; delta: string }
+  | { type: "reasoning-summary-delta"; id?: string; delta: string }
+  | {
+      type: "thinking-activity";
+      id?: string;
+      activity: {
+        kind: string;
+        label: string;
+        active: boolean;
+        eventType?: string;
+        itemType?: string;
+      };
+    }
+  | { type: "text-delta"; id?: string; delta: string };
 
 type SetChatMessages = (
   messages: ChatMessage[] | ((messages: ChatMessage[]) => ChatMessage[])
@@ -448,11 +484,62 @@ function extractThinkingSummaryText(message: ChatMessage) {
   return "";
 }
 
-function extractTaskPollingMetaFromMessage(
+function normalizeTaskRealtimeMeta(value: unknown): TaskRealtimeMeta | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as {
+    apiUrl?: unknown;
+    publicAccessToken?: unknown;
+    streamId?: unknown;
+    readTimeoutSeconds?: unknown;
+  };
+  const apiUrl =
+    typeof candidate.apiUrl === "string" && candidate.apiUrl.trim()
+      ? candidate.apiUrl.trim()
+      : DEFAULT_TRIGGER_REALTIME_API_URL;
+  const publicAccessToken =
+    typeof candidate.publicAccessToken === "string"
+      ? candidate.publicAccessToken.trim()
+      : "";
+  const streamId =
+    typeof candidate.streamId === "string" && candidate.streamId.trim()
+      ? candidate.streamId.trim()
+      : DEFAULT_TRIGGER_STREAM_ID;
+  const timeoutCandidate =
+    typeof candidate.readTimeoutSeconds === "number"
+      ? Math.trunc(candidate.readTimeoutSeconds)
+      : Number.parseInt(String(candidate.readTimeoutSeconds ?? ""), 10);
+  const readTimeoutSeconds =
+    Number.isFinite(timeoutCandidate) && timeoutCandidate > 0
+      ? timeoutCandidate
+      : DEFAULT_TRIGGER_STREAM_TIMEOUT_SECONDS;
+
+  if (!publicAccessToken) {
+    return null;
+  }
+
+  return { apiUrl, publicAccessToken, streamId, readTimeoutSeconds };
+}
+
+function extractTaskRuntimeMetaFromMessage(
   message: ChatMessage
-): TaskPollingMeta | null {
+): TaskRuntimeMeta | null {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  let latestFromData: TaskRuntimeMeta | null = null;
+  for (const part of parts) {
+    const normalized = extractTaskRuntimeMetaFromDataPart(part);
+    if (normalized) {
+      latestFromData = normalized;
+    }
+  }
+  if (latestFromData) {
+    return latestFromData;
+  }
+
   const text = extractMessageText(message);
-  let latest: TaskPollingMeta | null = null;
+  let latest: TaskRuntimeMeta | null = null;
   const taskAuthRegex = new RegExp(TASK_AUTH_PATTERN, "g");
 
   for (const match of text.matchAll(taskAuthRegex)) {
@@ -462,7 +549,7 @@ function extractTaskPollingMetaFromMessage(
     if (!runId || !Number.isFinite(cursor) || cursor < 0 || !cursorSig) {
       continue;
     }
-    latest = { runId, cursor, cursorSig };
+    latest = { runId, cursor, cursorSig, realtime: null };
   }
 
   return latest;
@@ -485,7 +572,7 @@ function findLatestTaskMessageInLatestTurn(messages: ChatMessage[]) {
     if (message.role !== "assistant") {
       continue;
     }
-    const taskMeta = extractTaskPollingMetaFromMessage(message);
+    const taskMeta = extractTaskRuntimeMetaFromMessage(message);
     if (!taskMeta) {
       continue;
     }
@@ -516,9 +603,9 @@ function findLatestAssistantMessageIdInLatestTurn(messages: ChatMessage[]) {
   return "";
 }
 
-function extractTaskPollingMetaFromDataPart(
+function extractTaskRuntimeMetaFromDataPart(
   dataPart: unknown
-): TaskPollingMeta | null {
+): TaskRuntimeMeta | null {
   if (!dataPart || typeof dataPart !== "object") {
     return null;
   }
@@ -544,7 +631,89 @@ function extractTaskPollingMetaFromDataPart(
     return null;
   }
 
-  return { runId, cursor, cursorSig };
+  return {
+    runId,
+    cursor,
+    cursorSig,
+    realtime: normalizeTaskRealtimeMeta(candidate.data.realtime),
+  };
+}
+
+function normalizeRealtimeChunk(raw: unknown): RealtimeChunk | null {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+
+  const candidate = parsed as {
+    type?: unknown;
+    id?: unknown;
+    delta?: unknown;
+    activity?: {
+      kind?: unknown;
+      label?: unknown;
+      active?: unknown;
+      eventType?: unknown;
+      itemType?: unknown;
+    };
+  };
+  const type = typeof candidate.type === "string" ? candidate.type : "";
+  const id = typeof candidate.id === "string" ? candidate.id : undefined;
+
+  if (
+    (type === "reasoning-delta" ||
+      type === "reasoning-summary-delta" ||
+      type === "text-delta") &&
+    typeof candidate.delta === "string"
+  ) {
+    return { type, id, delta: candidate.delta };
+  }
+
+  if (type === "thinking-activity" && candidate.activity) {
+    const kind =
+      typeof candidate.activity.kind === "string"
+        ? candidate.activity.kind.trim()
+        : "";
+    const label =
+      typeof candidate.activity.label === "string"
+        ? candidate.activity.label.trim()
+        : "";
+    if (!kind || !label) {
+      return null;
+    }
+    return {
+      type: "thinking-activity",
+      id,
+      activity: {
+        kind,
+        label,
+        active:
+          typeof candidate.activity.active === "boolean"
+            ? candidate.activity.active
+            : Boolean(candidate.activity.active),
+        ...(typeof candidate.activity.eventType === "string" &&
+        candidate.activity.eventType.trim()
+          ? { eventType: candidate.activity.eventType.trim() }
+          : {}),
+        ...(typeof candidate.activity.itemType === "string" &&
+        candidate.activity.itemType.trim()
+          ? { itemType: candidate.activity.itemType.trim() }
+          : {}),
+      },
+    };
+  }
+
+  return null;
 }
 
 export function Chat({
@@ -587,6 +756,10 @@ export function Chat({
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetNonce, setTurnstileResetNonce] = useState(0);
+  const [realtimeIssue, setRealtimeIssue] = useState<{
+    runId: string;
+    message: string;
+  } | null>(null);
   const hadInFlightRequestRef = useRef(false);
   const pollingRunIdsRef = useRef<Set<string>>(new Set());
   const pollingTimersRef = useRef<Map<string, number>>(new Map());
@@ -596,7 +769,16 @@ export function Chat({
   const pollingAbortControllersRef = useRef<Map<string, AbortController>>(
     new Map()
   );
-  const pendingTaskMetaRef = useRef<TaskPollingMeta | null>(null);
+  const realtimeRunIdsRef = useRef<Set<string>>(new Set());
+  const realtimeStreamAbortControllersRef = useRef<
+    Map<string, AbortController>
+  >(new Map());
+  const realtimeRunSubscriptionsRef = useRef<
+    Map<string, { unsubscribe: () => void }>
+  >(new Map());
+  const completionSyncedRunsRef = useRef<Set<string>>(new Set());
+  const taskMetaByRunIdRef = useRef<Map<string, TaskRuntimeMeta>>(new Map());
+  const pendingTaskMetaRef = useRef<TaskRuntimeMeta | null>(null);
   const setMessagesRef = useRef<SetChatMessages | null>(null);
   const hasRecoveredWatchdogRef = useRef(false);
   const unmountedRef = useRef(false);
@@ -618,6 +800,17 @@ export function Chat({
         controller.abort();
       }
       pollingAbortControllersRef.current.clear();
+      for (const controller of realtimeStreamAbortControllersRef.current.values()) {
+        controller.abort();
+      }
+      realtimeStreamAbortControllersRef.current.clear();
+      for (const subscription of realtimeRunSubscriptionsRef.current.values()) {
+        subscription.unsubscribe();
+      }
+      realtimeRunSubscriptionsRef.current.clear();
+      realtimeRunIdsRef.current.clear();
+      completionSyncedRunsRef.current.clear();
+      taskMetaByRunIdRef.current.clear();
       pendingTaskMetaRef.current = null;
     };
   }, []);
@@ -670,6 +863,253 @@ export function Chat({
       }
       stopPollingRun(runId);
     }
+  };
+
+  const stopRealtimeRun = (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    realtimeRunIdsRef.current.delete(runId);
+    const controller = realtimeStreamAbortControllersRef.current.get(runId);
+    if (controller) {
+      controller.abort();
+    }
+    realtimeStreamAbortControllersRef.current.delete(runId);
+    const subscription = realtimeRunSubscriptionsRef.current.get(runId);
+    if (subscription) {
+      subscription.unsubscribe();
+    }
+    realtimeRunSubscriptionsRef.current.delete(runId);
+  };
+
+  const stopAllRealtimeRuns = (activeRunId = "") => {
+    const runIds = new Set<string>([
+      ...realtimeRunIdsRef.current,
+      ...realtimeStreamAbortControllersRef.current.keys(),
+      ...realtimeRunSubscriptionsRef.current.keys(),
+    ]);
+    for (const runId of runIds) {
+      if (activeRunId && runId === activeRunId) {
+        continue;
+      }
+      stopRealtimeRun(runId);
+    }
+  };
+
+  const resolveTargetMessageIdForRun = (
+    runId: string,
+    defaultMessageId: string,
+    current: ChatMessage[]
+  ) => {
+    const activeMessageId =
+      pollingMessageIdsRef.current.get(runId) || defaultMessageId;
+    if (current.some((msg) => msg.id === activeMessageId)) {
+      return activeMessageId;
+    }
+    const fallbackMessageId = findLatestAssistantMessageIdInLatestTurn(current);
+    if (fallbackMessageId) {
+      pollingMessageIdsRef.current.set(runId, fallbackMessageId);
+      return fallbackMessageId;
+    }
+    return "";
+  };
+
+  const replaceTaskMessageText = (
+    runId: string,
+    defaultMessageId: string,
+    text: string
+  ) => {
+    const updateMessages = setMessagesRef.current;
+    if (!updateMessages) {
+      return;
+    }
+    updateMessages((current) => {
+      const targetMessageId = resolveTargetMessageIdForRun(
+        runId,
+        defaultMessageId,
+        current
+      );
+      if (!targetMessageId) {
+        return current;
+      }
+
+      return current.map((msg) => {
+        if (msg.id !== targetMessageId) {
+          return msg;
+        }
+        return {
+          ...msg,
+          parts: [{ type: "text" as const, text }],
+        };
+      });
+    });
+  };
+
+  const applyTaskEventsToMessage = (
+    runId: string,
+    defaultMessageId: string,
+    events: TaskPollEvent[],
+    isCompleted: boolean
+  ) => {
+    const updateMessages = setMessagesRef.current;
+    if (!updateMessages) {
+      return;
+    }
+
+    updateMessages((current) => {
+      const targetMessageId = resolveTargetMessageIdForRun(
+        runId,
+        defaultMessageId,
+        current
+      );
+      if (!targetMessageId) {
+        return current;
+      }
+
+      return current.map((msg) => {
+        if (msg.id !== targetMessageId) {
+          return msg;
+        }
+
+        let nextReasoning = extractReasoningText(msg);
+        let nextReasoningSummary = extractThinkingSummaryText(msg);
+        let nextText = extractMessageText(msg);
+        const chartById = new Map<string, PlotlyChartPayload>();
+        for (const chart of extractExistingPlotlyCharts(msg)) {
+          chartById.set(chart.id, chart);
+        }
+        let artifactItems = extractExistingArtifactItems(msg);
+        let thinkingActivity = extractExistingThinkingActivity(msg);
+        let sawThinkingActivityEvent = false;
+        let latestNonThinkingReasoningTitle = "";
+
+        for (const event of events) {
+          if (event.type === "reasoning-delta") {
+            nextReasoning += event.delta;
+            continue;
+          }
+          if (event.type === "reasoning-summary-delta") {
+            const sanitizedSummary = sanitizeReasoningSummary(event.delta);
+            if (sanitizedSummary) {
+              nextReasoningSummary = sanitizedSummary;
+            }
+            continue;
+          }
+          if (event.type === "thinking-activity") {
+            sawThinkingActivityEvent = true;
+            const mappedTitle = mapReasoningTitleFromItemType(
+              event.activity.itemType || ""
+            );
+            if (mappedTitle && mappedTitle !== "正在思考") {
+              latestNonThinkingReasoningTitle = mappedTitle;
+            }
+            if (event.activity.active) {
+              thinkingActivity = event.activity;
+            } else if (!thinkingActivity || !thinkingActivity.active) {
+              thinkingActivity = event.activity;
+            }
+            continue;
+          }
+          if (event.type === "text-delta") {
+            nextText += event.delta;
+            continue;
+          }
+          if (event.type === "text-replace") {
+            nextText = event.text;
+            continue;
+          }
+          if (event.type === "plotly-spec") {
+            chartById.set(event.chart.id, event.chart);
+            continue;
+          }
+          if (event.type === "artifact-items") {
+            artifactItems = event.items;
+          }
+        }
+        if (latestNonThinkingReasoningTitle) {
+          const mappedSummary = sanitizeReasoningSummary(
+            latestNonThinkingReasoningTitle
+          );
+          if (mappedSummary) {
+            nextReasoningSummary = mappedSummary;
+          }
+        }
+
+        if (isCompleted && !sawThinkingActivityEvent) {
+          thinkingActivity = thinkingActivity
+            ? { ...thinkingActivity, active: false, label: "已思考" }
+            : {
+                reasoningId: `thinking-${runId}`,
+                kind: "thinking",
+                label: "已思考",
+                active: false,
+              };
+        }
+
+        const chartParts = [...chartById.values()].map((chart) => ({
+          type: "data-plotly-chart" as const,
+          data: { chart },
+        }));
+
+        const nextParts = [
+          ...(nextReasoning || thinkingActivity || nextReasoningSummary
+            ? [
+                {
+                  type: "reasoning" as const,
+                  text: nextReasoning || " ",
+                  state: isCompleted
+                    ? ("done" as const)
+                    : ("streaming" as const),
+                },
+              ]
+            : []),
+          ...(nextText
+            ? [
+                {
+                  type: "text" as const,
+                  text: nextText,
+                },
+              ]
+            : []),
+          ...(thinkingActivity
+            ? [
+                {
+                  type: "data-thinking-activity" as const,
+                  data: thinkingActivity,
+                },
+              ]
+            : []),
+          ...(nextReasoningSummary.trim()
+            ? [
+                {
+                  type: "data-thinking-summary" as const,
+                  data: {
+                    reasoningId:
+                      thinkingActivity?.reasoningId || `thinking-${runId}`,
+                    text: nextReasoningSummary.trim(),
+                  },
+                },
+              ]
+            : []),
+          ...(artifactItems.length > 0
+            ? [
+                {
+                  type: "data-backtest-artifact" as const,
+                  data: {
+                    items: artifactItems,
+                  },
+                },
+              ]
+            : []),
+          ...chartParts,
+        ] as ChatMessage["parts"];
+
+        return {
+          ...msg,
+          parts: nextParts.length > 0 ? nextParts : msg.parts,
+        };
+      });
+    });
   };
 
   const startPollingRun = (
@@ -748,40 +1188,14 @@ export function Chat({
               return;
             }
 
-            const updateMessages = setMessagesRef.current;
-            if (updateMessages) {
-              const activeMessageId =
-                pollingMessageIdsRef.current.get(runId) || messageId;
-              updateMessages((current) => {
-                const targetMessageId = current.some(
-                  (msg) => msg.id === activeMessageId
-                )
-                  ? activeMessageId
-                  : findLatestAssistantMessageIdInLatestTurn(current);
-                if (!targetMessageId) {
-                  return current;
-                }
-
-                return current.map((msg) => {
-                  if (msg.id !== targetMessageId) {
-                    return msg;
-                  }
-                  return {
-                    ...msg,
-                    parts: [
-                      {
-                        type: "text" as const,
-                        text:
-                          forbiddenCause === "missing_task_session" ||
-                          forbiddenCause === "task_session_mismatch"
-                            ? "任务会话已失效，请刷新页面后重试。"
-                            : "任务轮询鉴权已失效，请刷新页面后重试。",
-                      },
-                    ],
-                  };
-                });
-              });
-            }
+            replaceTaskMessageText(
+              runId,
+              messageId,
+              forbiddenCause === "missing_task_session" ||
+                forbiddenCause === "task_session_mismatch"
+                ? "任务会话已失效，请刷新页面后重试。"
+                : "任务轮询鉴权已失效，请刷新页面后重试。"
+            );
             stopPollingRun(runId);
             return;
           }
@@ -801,27 +1215,6 @@ export function Chat({
         }
         pollingCursorRef.current.set(runId, payload.nextCursor);
         pollingCursorSigRef.current.set(runId, payload.nextCursorSig);
-
-        const activeMessageId =
-          pollingMessageIdsRef.current.get(runId) || messageId;
-        const updateMessages = setMessagesRef.current;
-        if (!updateMessages) {
-          stopPollingRun(runId);
-          return;
-        }
-
-        const resolveTargetMessageId = (current: ChatMessage[]) => {
-          if (current.some((msg) => msg.id === activeMessageId)) {
-            return activeMessageId;
-          }
-          const fallbackMessageId =
-            findLatestAssistantMessageIdInLatestTurn(current);
-          if (fallbackMessageId) {
-            pollingMessageIdsRef.current.set(runId, fallbackMessageId);
-            return fallbackMessageId;
-          }
-          return "";
-        };
 
         const pollEvents = normalizeTaskPollEvents(payload.events);
         if (pollEvents.length === 0) {
@@ -854,158 +1247,7 @@ export function Chat({
         }
 
         if (pollEvents.length > 0 || payload.isCompleted) {
-          updateMessages((current) => {
-            const targetMessageId = resolveTargetMessageId(current);
-            if (!targetMessageId) {
-              return current;
-            }
-
-            return current.map((msg) => {
-              if (msg.id !== targetMessageId) {
-                return msg;
-              }
-
-              let nextReasoning = extractReasoningText(msg);
-              let nextReasoningSummary = extractThinkingSummaryText(msg);
-              let nextText = extractMessageText(msg);
-              const chartById = new Map<string, PlotlyChartPayload>();
-              for (const chart of extractExistingPlotlyCharts(msg)) {
-                chartById.set(chart.id, chart);
-              }
-              let artifactItems = extractExistingArtifactItems(msg);
-              let thinkingActivity = extractExistingThinkingActivity(msg);
-              let sawThinkingActivityEvent = false;
-              let latestNonThinkingReasoningTitle = "";
-
-              for (const event of pollEvents) {
-                if (event.type === "reasoning-delta") {
-                  nextReasoning += event.delta;
-                  continue;
-                }
-                if (event.type === "reasoning-summary-delta") {
-                  const sanitizedSummary = sanitizeReasoningSummary(event.delta);
-                  if (sanitizedSummary) {
-                    nextReasoningSummary = sanitizedSummary;
-                  }
-                  continue;
-                }
-                if (event.type === "thinking-activity") {
-                  sawThinkingActivityEvent = true;
-                  const mappedTitle = mapReasoningTitleFromItemType(
-                    event.activity.itemType || ""
-                  );
-                  if (mappedTitle && mappedTitle !== "正在思考") {
-                    latestNonThinkingReasoningTitle = mappedTitle;
-                  }
-                  if (event.activity.active) {
-                    // Prefer currently active activity over passive updates
-                    // in the same polling window.
-                    thinkingActivity = event.activity;
-                  } else if (!thinkingActivity || !thinkingActivity.active) {
-                    thinkingActivity = event.activity;
-                  }
-                  continue;
-                }
-                if (event.type === "text-delta") {
-                  nextText += event.delta;
-                  continue;
-                }
-                if (event.type === "text-replace") {
-                  nextText = event.text;
-                  continue;
-                }
-                if (event.type === "plotly-spec") {
-                  chartById.set(event.chart.id, event.chart);
-                  continue;
-                }
-                if (event.type === "artifact-items") {
-                  artifactItems = event.items;
-                }
-              }
-              if (latestNonThinkingReasoningTitle) {
-                const mappedSummary = sanitizeReasoningSummary(
-                  latestNonThinkingReasoningTitle
-                );
-                if (mappedSummary) {
-                  nextReasoningSummary = mappedSummary;
-                }
-              }
-
-              if (payload.isCompleted && !sawThinkingActivityEvent) {
-                thinkingActivity = thinkingActivity
-                  ? { ...thinkingActivity, active: false, label: "已思考" }
-                  : {
-                      reasoningId: `thinking-${runId}`,
-                      kind: "thinking",
-                      label: "已思考",
-                      active: false,
-                    };
-              }
-
-              const chartParts = [...chartById.values()].map((chart) => ({
-                type: "data-plotly-chart" as const,
-                data: { chart },
-              }));
-
-              const nextParts = [
-                ...(nextReasoning || thinkingActivity || nextReasoningSummary
-                  ? [
-                      {
-                        type: "reasoning" as const,
-                        text: nextReasoning || " ",
-                        state: payload.isCompleted
-                          ? ("done" as const)
-                          : ("streaming" as const),
-                      },
-                    ]
-                  : []),
-                ...(nextText
-                  ? [
-                      {
-                        type: "text" as const,
-                        text: nextText,
-                      },
-                    ]
-                  : []),
-                ...(thinkingActivity
-                  ? [
-                      {
-                        type: "data-thinking-activity" as const,
-                        data: thinkingActivity,
-                      },
-                    ]
-                  : []),
-                ...(nextReasoningSummary.trim()
-                  ? [
-                      {
-                        type: "data-thinking-summary" as const,
-                        data: {
-                          reasoningId:
-                            thinkingActivity?.reasoningId || `thinking-${runId}`,
-                          text: nextReasoningSummary.trim(),
-                        },
-                      },
-                    ]
-                  : []),
-                ...(artifactItems.length > 0
-                  ? [
-                      {
-                        type: "data-backtest-artifact" as const,
-                        data: {
-                          items: artifactItems,
-                        },
-                      },
-                    ]
-                  : []),
-                ...chartParts,
-              ] as ChatMessage["parts"];
-
-              return {
-                ...msg,
-                parts: nextParts.length > 0 ? nextParts : msg.parts,
-              };
-            });
-          });
+          applyTaskEventsToMessage(runId, messageId, pollEvents, payload.isCompleted);
         }
 
         if (payload.isCompleted) {
@@ -1015,24 +1257,7 @@ export function Chat({
         }
 
         if (payload.isFailed) {
-          updateMessages((current) => {
-            const targetMessageId = resolveTargetMessageId(current);
-            if (!targetMessageId) {
-              return current;
-            }
-
-            return current.map((msg) => {
-              if (msg.id !== targetMessageId) {
-                return msg;
-              }
-              return {
-                ...msg,
-                parts: [
-                  { type: "text", text: `任务执行失败：${payload.status}` },
-                ],
-              };
-            });
-          });
+          replaceTaskMessageText(runId, messageId, `任务执行失败：${payload.status}`);
           stopPollingRun(runId);
           return;
         }
@@ -1058,6 +1283,229 @@ export function Chat({
 
     const firstTimer = window.setTimeout(poll, TASK_POLL_INTERVAL_MS);
     pollingTimersRef.current.set(runId, firstTimer);
+  };
+
+  const syncCompletionFromTasksApi = async (
+    runId: string,
+    messageId: string
+  ) => {
+    if (completionSyncedRunsRef.current.has(runId)) {
+      return;
+    }
+    completionSyncedRunsRef.current.add(runId);
+    const meta = taskMetaByRunIdRef.current.get(runId);
+    if (!meta) {
+      applyTaskEventsToMessage(runId, messageId, [], true);
+      mutate(unstable_serialize(getChatHistoryPaginationKey));
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/tasks/${runId}?cursor=${meta.cursor}&cursor_sig=${encodeURIComponent(
+          meta.cursorSig
+        )}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Task completion sync failed (${response.status})`);
+      }
+
+      const payload = (await response.json()) as TaskStatusResponse;
+      if (
+        typeof payload.nextCursor === "number" &&
+        Number.isFinite(payload.nextCursor)
+      ) {
+        pollingCursorRef.current.set(runId, payload.nextCursor);
+      }
+      if (typeof payload.nextCursorSig === "string" && payload.nextCursorSig) {
+        pollingCursorSigRef.current.set(runId, payload.nextCursorSig);
+      }
+
+      const completionEvents = normalizeTaskPollEvents(payload.events).filter(
+        (event) =>
+          event.type === "text-replace" ||
+          event.type === "plotly-spec" ||
+          event.type === "artifact-items"
+      );
+
+      applyTaskEventsToMessage(runId, messageId, completionEvents, true);
+      mutate(unstable_serialize(getChatHistoryPaginationKey));
+    } catch (error) {
+      console.error(`[chat-ui] Task completion sync failed for ${runId}:`, error);
+      applyTaskEventsToMessage(runId, messageId, [], true);
+      setRealtimeIssue({
+        runId,
+        message: "实时任务已结束，但完成态同步失败，请点击“手动补拉”。",
+      });
+    }
+  };
+
+  const startRealtimeRun = (taskMeta: TaskRuntimeMeta, messageId: string) => {
+    const runId = taskMeta.runId;
+    if (!runId || !messageId) {
+      return;
+    }
+
+    taskMetaByRunIdRef.current.set(runId, taskMeta);
+    pollingMessageIdsRef.current.set(runId, messageId);
+
+    if (realtimeRunIdsRef.current.has(runId)) {
+      return;
+    }
+
+    if (!taskMeta.realtime) {
+      setRealtimeIssue({
+        runId,
+        message: "未拿到实时订阅令牌，请点击“手动补拉”。",
+      });
+      return;
+    }
+
+    setRealtimeIssue((current) => (current?.runId === runId ? null : current));
+    stopPollingRun(runId);
+    realtimeRunIdsRef.current.add(runId);
+    const streamController = new AbortController();
+    realtimeStreamAbortControllersRef.current.set(runId, streamController);
+
+    const configureRealtimeClient = () => {
+      configureTriggerClient({
+        baseURL: taskMeta.realtime?.apiUrl || DEFAULT_TRIGGER_REALTIME_API_URL,
+        accessToken: taskMeta.realtime?.publicAccessToken || "",
+      });
+    };
+
+    const consumeRealtimeStream = async () => {
+      while (!unmountedRef.current && realtimeRunIdsRef.current.has(runId)) {
+        try {
+          configureRealtimeClient();
+          const stream = await triggerStreams.read<string>(
+            runId,
+            taskMeta.realtime?.streamId || DEFAULT_TRIGGER_STREAM_ID,
+            {
+              signal: streamController.signal,
+              timeoutInSeconds:
+                taskMeta.realtime?.readTimeoutSeconds ||
+                DEFAULT_TRIGGER_STREAM_TIMEOUT_SECONDS,
+            }
+          );
+          for await (const rawChunk of stream) {
+            if (!realtimeRunIdsRef.current.has(runId)) {
+              return;
+            }
+            const normalized = normalizeRealtimeChunk(rawChunk);
+            if (!normalized) {
+              continue;
+            }
+            if (normalized.type === "thinking-activity") {
+              applyTaskEventsToMessage(
+                runId,
+                messageId,
+                [
+                  {
+                    type: "thinking-activity",
+                    activity: {
+                      reasoningId: normalized.id || `thinking-${runId}`,
+                      kind: normalized.activity.kind,
+                      label: normalized.activity.label,
+                      active: normalized.activity.active,
+                      ...(normalized.activity.eventType
+                        ? { eventType: normalized.activity.eventType }
+                        : {}),
+                      ...(normalized.activity.itemType
+                        ? { itemType: normalized.activity.itemType }
+                        : {}),
+                    },
+                  },
+                ],
+                false
+              );
+              continue;
+            }
+            applyTaskEventsToMessage(
+              runId,
+              messageId,
+              [
+                normalized.type === "text-delta"
+                  ? { type: "text-delta", delta: normalized.delta }
+                  : normalized.type === "reasoning-delta"
+                    ? {
+                        type: "reasoning-delta",
+                        id: normalized.id,
+                        delta: normalized.delta,
+                      }
+                    : {
+                        type: "reasoning-summary-delta",
+                        id: normalized.id,
+                        delta: normalized.delta,
+                      },
+              ],
+              false
+            );
+          }
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+          console.error(`[chat-ui] Realtime stream failed for ${runId}:`, error);
+          setRealtimeIssue({
+            runId,
+            message: "实时通道异常，请点击“手动补拉”。",
+          });
+          stopRealtimeRun(runId);
+          return;
+        }
+      }
+    };
+
+    const watchRunStatus = async () => {
+      try {
+        configureRealtimeClient();
+        const subscription = triggerRuns.subscribeToRun(runId, {
+          stopOnCompletion: false,
+          skipColumns: ["payload", "output"],
+        });
+        realtimeRunSubscriptionsRef.current.set(runId, subscription);
+        for await (const run of subscription) {
+          if (!realtimeRunIdsRef.current.has(runId)) {
+            subscription.unsubscribe();
+            return;
+          }
+          if (run.isFailed) {
+            replaceTaskMessageText(runId, messageId, `任务执行失败：${run.status}`);
+            setRealtimeIssue({
+              runId,
+              message: `实时任务失败：${run.status}。可点击“手动补拉”确认最终状态。`,
+            });
+            stopRealtimeRun(runId);
+            return;
+          }
+          if (run.isCompleted) {
+            await syncCompletionFromTasksApi(runId, messageId);
+            stopRealtimeRun(runId);
+            return;
+          }
+        }
+      } catch (error) {
+        console.error(`[chat-ui] Realtime status failed for ${runId}:`, error);
+        setRealtimeIssue({
+          runId,
+          message: "实时状态订阅失败，请点击“手动补拉”。",
+        });
+        stopRealtimeRun(runId);
+      }
+    };
+
+    consumeRealtimeStream().catch((error) => {
+      console.error(`[chat-ui] Realtime stream setup failed for ${runId}:`, error);
+    });
+    watchRunStatus().catch((error) => {
+      console.error(`[chat-ui] Realtime status setup failed for ${runId}:`, error);
+    });
   };
 
   const {
@@ -1132,9 +1580,10 @@ export function Chat({
     }),
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
-      const taskMeta = extractTaskPollingMetaFromDataPart(dataPart);
+      const taskMeta = extractTaskRuntimeMetaFromDataPart(dataPart);
       if (taskMeta) {
         pendingTaskMetaRef.current = taskMeta;
+        taskMetaByRunIdRef.current.set(taskMeta.runId, taskMeta);
       }
     },
     onFinish: ({ message, isAbort, isError }) => {
@@ -1145,21 +1594,18 @@ export function Chat({
       }
 
       const taskMeta =
-        extractTaskPollingMetaFromMessage(message as ChatMessage) ||
+        extractTaskRuntimeMetaFromMessage(message as ChatMessage) ||
         pendingTaskMetaRef.current;
       if (!taskMeta) {
         return;
       }
       pendingTaskMetaRef.current = null;
+      taskMetaByRunIdRef.current.set(taskMeta.runId, taskMeta);
 
       // Create one watchdog per completed /api/chat response message.
       stopAllPollingRuns(taskMeta.runId);
-      startPollingRun(
-        taskMeta.runId,
-        message.id,
-        taskMeta.cursor,
-        taskMeta.cursorSig
-      );
+      stopAllRealtimeRuns(taskMeta.runId);
+      startRealtimeRun(taskMeta, message.id);
     },
     onError: (error) => {
       if (error instanceof ChatSDKError) {
@@ -1216,7 +1662,10 @@ export function Chat({
         return;
       }
 
-      if (pollingRunIdsRef.current.size > 0) {
+      if (
+        pollingRunIdsRef.current.size > 0 ||
+        realtimeRunIdsRef.current.size > 0
+      ) {
         return;
       }
 
@@ -1275,6 +1724,10 @@ export function Chat({
   useEffect(() => {
     hasRecoveredWatchdogRef.current = false;
     stopAllPollingRuns();
+    stopAllRealtimeRuns();
+    setRealtimeIssue(null);
+    completionSyncedRunsRef.current.clear();
+    taskMetaByRunIdRef.current.clear();
     pendingTaskMetaRef.current = null;
   }, [id]);
 
@@ -1282,29 +1735,35 @@ export function Chat({
     // A new chat submit started; stop previous watchdogs immediately.
     if (status === "submitted") {
       stopAllPollingRuns();
+      stopAllRealtimeRuns();
+      setRealtimeIssue(null);
+      completionSyncedRunsRef.current.clear();
       pendingTaskMetaRef.current = null;
     }
   }, [status]);
 
   useEffect(() => {
-    // Fallback guard: if onFinish misses for any reason, recover polling from latest task metadata.
+    // Fallback guard: if onFinish misses for any reason, recover realtime subscription from latest task metadata.
     if (status === "submitted" || status === "streaming") {
       return;
     }
 
     const pendingTaskFromMessage = findLatestTaskMessageInLatestTurn(messages);
     if (pendingTaskFromMessage) {
-      if (pollingRunIdsRef.current.has(pendingTaskFromMessage.runId)) {
+      if (
+        realtimeRunIdsRef.current.has(pendingTaskFromMessage.runId) ||
+        pollingRunIdsRef.current.has(pendingTaskFromMessage.runId)
+      ) {
         return;
       }
 
-      stopAllPollingRuns(pendingTaskFromMessage.runId);
-      startPollingRun(
+      taskMetaByRunIdRef.current.set(
         pendingTaskFromMessage.runId,
-        pendingTaskFromMessage.messageId,
-        pendingTaskFromMessage.cursor,
-        pendingTaskFromMessage.cursorSig
+        pendingTaskFromMessage
       );
+      stopAllPollingRuns(pendingTaskFromMessage.runId);
+      stopAllRealtimeRuns(pendingTaskFromMessage.runId);
+      startRealtimeRun(pendingTaskFromMessage, pendingTaskFromMessage.messageId);
       return;
     }
 
@@ -1312,7 +1771,10 @@ export function Chat({
     if (!pendingTaskFromData) {
       return;
     }
-    if (pollingRunIdsRef.current.has(pendingTaskFromData.runId)) {
+    if (
+      realtimeRunIdsRef.current.has(pendingTaskFromData.runId) ||
+      pollingRunIdsRef.current.has(pendingTaskFromData.runId)
+    ) {
       return;
     }
     const latestAssistantMessageId =
@@ -1322,12 +1784,8 @@ export function Chat({
     }
 
     stopAllPollingRuns(pendingTaskFromData.runId);
-    startPollingRun(
-      pendingTaskFromData.runId,
-      latestAssistantMessageId,
-      pendingTaskFromData.cursor,
-      pendingTaskFromData.cursorSig
-    );
+    stopAllRealtimeRuns(pendingTaskFromData.runId);
+    startRealtimeRun(pendingTaskFromData, latestAssistantMessageId);
     pendingTaskMetaRef.current = null;
   }, [messages, status]);
 
@@ -1341,13 +1799,10 @@ export function Chat({
     if (!pendingTask) {
       return;
     }
+    taskMetaByRunIdRef.current.set(pendingTask.runId, pendingTask);
     stopAllPollingRuns(pendingTask.runId);
-    startPollingRun(
-      pendingTask.runId,
-      pendingTask.messageId,
-      pendingTask.cursor,
-      pendingTask.cursorSig
-    );
+    stopAllRealtimeRuns(pendingTask.runId);
+    startRealtimeRun(pendingTask, pendingTask.messageId);
   }, [id, initialMessages]);
 
   const { data: votes } = useSWR<Vote[]>(
@@ -1364,6 +1819,43 @@ export function Chat({
     resumeStream,
     setMessages,
   });
+
+  const handleManualTaskSync = useCallback(() => {
+    const issue = realtimeIssue;
+    if (!issue) {
+      return;
+    }
+    const taskMeta = taskMetaByRunIdRef.current.get(issue.runId);
+    if (!taskMeta) {
+      toast({
+        type: "error",
+        description: "当前任务缺少补拉参数，请刷新页面后重试。",
+      });
+      return;
+    }
+
+    const messageId =
+      pollingMessageIdsRef.current.get(issue.runId) ||
+      findLatestAssistantMessageIdInLatestTurn(messages);
+    if (!messageId) {
+      toast({
+        type: "error",
+        description: "未找到可更新的回复消息，请刷新页面后重试。",
+      });
+      return;
+    }
+
+    stopRealtimeRun(issue.runId);
+    completionSyncedRunsRef.current.delete(issue.runId);
+    replaceTaskMessageText(issue.runId, messageId, "正在手动补拉任务结果...");
+    startPollingRun(
+      taskMeta.runId,
+      messageId,
+      taskMeta.cursor,
+      taskMeta.cursorSig
+    );
+    setRealtimeIssue(null);
+  }, [messages, realtimeIssue]);
 
   return (
     <>
@@ -1387,7 +1879,19 @@ export function Chat({
           votes={votes}
         />
 
-        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+          {realtimeIssue ? (
+            <div className="mb-2 flex w-full items-center justify-between rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <span>{realtimeIssue.message}</span>
+              <button
+                className="rounded border border-amber-500 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                onClick={handleManualTaskSync}
+                type="button"
+              >
+                手动补拉
+              </button>
+            </div>
+          ) : null}
           {!isReadonly && (
             <MultimodalInput
               attachments={attachments}

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { geolocation } from "@vercel/functions";
 import {
   convertToModelMessages,
@@ -10,7 +9,7 @@ import {
 } from "ai";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
-import { runs, tasks } from "@trigger.dev/sdk";
+import { auth as triggerAuth, runs, tasks } from "@trigger.dev/sdk";
 import { auth, type UserType } from "@/app/(auth)/auth";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
@@ -57,6 +56,7 @@ import type { ChatMessage, ThinkingActivityPayload } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
 import { generateTitleFromUserMessage } from "../../actions";
+import { buildTriggerIdempotencyKey } from "./idempotency";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 import { shouldRejectByDailyQuota } from "./quota-guard";
 
@@ -70,6 +70,18 @@ const USE_TRIGGER_DEV =
   (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
 const CHAT_API_DEBUG_VERBOSE =
   (process.env.CHAT_API_DEBUG_VERBOSE || "false").toLowerCase() === "true";
+const TRIGGER_REALTIME_STREAM_ID = "fund-chat-realtime";
+const TRIGGER_REALTIME_API_URL =
+  process.env.TRIGGER_API_URL || "https://api.trigger.dev";
+const TRIGGER_REALTIME_PUBLIC_TOKEN_TTL =
+  process.env.TRIGGER_REALTIME_PUBLIC_TOKEN_TTL || "30m";
+const TRIGGER_REALTIME_READ_TIMEOUT_SECONDS = (() => {
+  const parsed = Number.parseInt(
+    process.env.TRIGGER_STREAM_READ_TIMEOUT_SECONDS || "1800",
+    10
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1800;
+})();
 
 function getStreamContext() {
   try {
@@ -133,6 +145,81 @@ function extractLatestUserText(body: PostRequestBody) {
   return "";
 }
 
+type LatestUserAttachment = {
+  name: string;
+  url: string;
+  mediaType: string;
+};
+
+function normalizeFilePart(part: unknown): LatestUserAttachment | null {
+  if (!part || typeof part !== "object") {
+    return null;
+  }
+  const candidate = part as {
+    type?: unknown;
+    url?: unknown;
+    name?: unknown;
+    filename?: unknown;
+    mediaType?: unknown;
+    contentType?: unknown;
+  };
+
+  if (candidate.type !== "file") {
+    return null;
+  }
+
+  const url = typeof candidate.url === "string" ? candidate.url.trim() : "";
+  if (!url) {
+    return null;
+  }
+
+  const nameCandidate =
+    typeof candidate.name === "string"
+      ? candidate.name
+      : typeof candidate.filename === "string"
+        ? candidate.filename
+        : "uploaded_file";
+  const mediaTypeCandidate =
+    typeof candidate.mediaType === "string"
+      ? candidate.mediaType
+      : typeof candidate.contentType === "string"
+        ? candidate.contentType
+        : "application/octet-stream";
+
+  return {
+    name: nameCandidate.trim() || "uploaded_file",
+    url,
+    mediaType: mediaTypeCandidate.trim() || "application/octet-stream",
+  };
+}
+
+function extractLatestUserAttachments(body: PostRequestBody): LatestUserAttachment[] {
+  const collectFromParts = (parts: unknown): LatestUserAttachment[] => {
+    if (!Array.isArray(parts)) {
+      return [];
+    }
+    return parts
+      .map((part) => normalizeFilePart(part))
+      .filter((item): item is LatestUserAttachment => Boolean(item));
+  };
+
+  if (body.message?.role === "user") {
+    return collectFromParts(body.message.parts);
+  }
+
+  if (Array.isArray(body.messages)) {
+    for (let i = body.messages.length - 1; i >= 0; i -= 1) {
+      const current = body.messages[i] as { role?: unknown; parts?: unknown };
+      if (current?.role !== "user") {
+        continue;
+      }
+      return collectFromParts(current.parts);
+    }
+  }
+
+  return [];
+}
+
 function extractLatestUserMessageId(body: PostRequestBody) {
   if (body.message?.role === "user" && typeof body.message.id === "string") {
     return body.message.id;
@@ -154,25 +241,6 @@ function extractLatestUserMessageId(body: PostRequestBody) {
   }
 
   return "";
-}
-
-function buildTriggerIdempotencyKey({
-  chatId,
-  userId,
-  requestBody,
-  userText,
-}: {
-  chatId: string;
-  userId: string;
-  requestBody: PostRequestBody;
-  userText: string;
-}) {
-  const messageId = extractLatestUserMessageId(requestBody);
-  const rawKey = messageId
-    ? `fund-chat:${chatId}:${userId}:${messageId}`
-    : `fund-chat:${chatId}:${userId}:${requestBody.id}:${userText}`;
-
-  return createHash("sha256").update(rawKey).digest("hex");
 }
 
 function chatDebug(event: string, payload?: Record<string, unknown>) {
@@ -367,6 +435,7 @@ async function streamFromClaudeProxy({
   chatId,
   isNewChat,
   userText,
+  attachments,
   userType,
   turnstileToken,
 }: {
@@ -374,6 +443,7 @@ async function streamFromClaudeProxy({
   chatId: string;
   isNewChat: boolean;
   userText: string;
+  attachments: LatestUserAttachment[];
   userType: UserType;
   turnstileToken?: string;
 }) {
@@ -398,6 +468,8 @@ async function streamFromClaudeProxy({
     body: JSON.stringify({
       model: FIXED_CHAT_MODEL,
       stream: true,
+      userText,
+      attachments,
       messages: [
         {
           role: "user",
@@ -798,6 +870,7 @@ export async function POST(request: Request) {
 
     const backend = process.env.CHAT_BACKEND || DEFAULT_BACKEND;
     const latestUserText = extractLatestUserText(requestBody);
+    const latestUserAttachments = extractLatestUserAttachments(requestBody);
     const turnstileTokenFromBody =
       typeof rawRequestBody?.turnstileToken === "string"
         ? rawRequestBody.turnstileToken
@@ -974,8 +1047,10 @@ export async function POST(request: Request) {
           const triggerIdempotencyKey = buildTriggerIdempotencyKey({
             chatId: id,
             userId: session.user.id,
-            requestBody,
+            requestId: requestBody.id,
+            messageId: extractLatestUserMessageId(requestBody),
             userText: latestUserText,
+            attachments: latestUserAttachments,
           });
           const handle = await tasks.trigger<typeof fundChatTask>(
             "fund-chat-task",
@@ -984,6 +1059,7 @@ export async function POST(request: Request) {
               userType,
               chatId: id,
               userText: latestUserText,
+              attachments: latestUserAttachments,
               model: FIXED_CHAT_MODEL,
               isNewChat: !chat,
               turnstileToken: turnstileToken || undefined,
@@ -1016,6 +1092,29 @@ export async function POST(request: Request) {
             cursorSig: initialCursorSig,
             ttlSeconds: taskOwnerTtlSeconds,
           });
+          let realtimePublicAccessToken = "";
+          try {
+            realtimePublicAccessToken = await triggerAuth.createPublicToken({
+              scopes: {
+                read: {
+                  runs: [runId],
+                },
+              },
+              expirationTime: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
+              realtime: {
+                skipColumns: ["payload", "output"],
+              },
+            });
+          } catch (tokenError) {
+            chatDebug("trigger_realtime_token_failed", {
+              chatId: id,
+              runId,
+              error:
+                tokenError instanceof Error
+                  ? tokenError.message
+                  : String(tokenError || "unknown"),
+            });
+          }
           chatDebug("trigger_task_submitted", {
             chatId: id,
             runId,
@@ -1045,6 +1144,16 @@ export async function POST(request: Request) {
               runId,
               cursor: initialCursor,
               cursorSig: initialCursorSig,
+              ...(realtimePublicAccessToken
+                ? {
+                    realtime: {
+                      apiUrl: TRIGGER_REALTIME_API_URL,
+                      publicAccessToken: realtimePublicAccessToken,
+                      streamId: TRIGGER_REALTIME_STREAM_ID,
+                      readTimeoutSeconds: TRIGGER_REALTIME_READ_TIMEOUT_SECONDS,
+                    },
+                  }
+                : {}),
             },
           });
           dataStream.write({
@@ -1302,6 +1411,7 @@ export async function POST(request: Request) {
             chatId: id,
             isNewChat: !chat,
             userText: latestUserText,
+            attachments: latestUserAttachments,
             userType,
             turnstileToken,
           });

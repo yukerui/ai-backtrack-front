@@ -18,6 +18,16 @@ const payloadSchema = z.object({
   userType: z.enum(["guest", "regular"]).optional(),
   chatId: z.string(),
   userText: z.string().min(1),
+  attachments: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(160),
+        url: z.string().url(),
+        mediaType: z.string().min(1).max(120),
+      })
+    )
+    .max(20)
+    .optional(),
   model: z.string().optional(),
   isNewChat: z.boolean().optional(),
   turnstileToken: z.string().optional(),
@@ -340,6 +350,7 @@ export const fundChatTask = schemaTask({
       userType,
       chatId,
       userText,
+      attachments,
       model,
       isNewChat,
       turnstileToken,
@@ -352,6 +363,7 @@ export const fundChatTask = schemaTask({
       userType: userType || "",
       chatId,
       model: model || "gpt-5.3-codex",
+      attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
       isNewChat: Boolean(isNewChat),
       hasTurnstileToken: Boolean(turnstileToken?.trim()),
       policyPrechecked: Boolean(policyPrechecked),
@@ -379,15 +391,17 @@ export const fundChatTask = schemaTask({
       headers["x-turnstile-token"] = token;
       headers["cf-turnstile-response"] = token;
     }
+    if (policyPrechecked) {
+      headers["x-policy-prechecked"] = "1";
+    }
     if (process.env.INTERNAL_TASK_KEY) {
       headers["x-internal-task-key"] = process.env.INTERNAL_TASK_KEY;
-      if (policyPrechecked) {
-        headers["x-policy-prechecked"] = "1";
-      }
     }
     const requestBody = JSON.stringify({
       model: model || "gpt-5.3-codex",
       stream: true,
+      userText,
+      attachments: attachments || [],
       messages: [{ role: "user", content: userText }],
     });
     const timeoutSignal =
