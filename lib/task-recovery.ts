@@ -18,6 +18,7 @@ const RETRYABLE_REALTIME_STREAM_PATTERNS = [
   /stream\s+not\s+found/i,
   /not\s+found/i,
   /could\s+not\s+fetch\s+stream/i,
+  /could\s+not\s+subscribe\s+to\s+stream/i,
   /failed\s+to\s+fetch/i,
 ];
 

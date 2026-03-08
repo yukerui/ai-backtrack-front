@@ -52,6 +52,12 @@ test("should retry realtime stream when stream is not ready yet", () => {
     ),
     true
   );
+  assert.equal(
+    shouldRetryRealtimeStreamError(
+      new Error("403 Could not subscribe to stream")
+    ),
+    true
+  );
 });
 
 test("should not retry realtime stream on auth failure", () => {

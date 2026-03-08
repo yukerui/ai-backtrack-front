@@ -43,6 +43,11 @@ import {
 } from "@/lib/plotly";
 import { isRedisConfigured } from "@/lib/redis";
 import {
+  buildRealtimeTokenLogMeta,
+  normalizeRealtimeApiHost,
+  normalizeRealtimeError,
+} from "@/lib/realtime-log";
+import {
   getTaskRunMessageId,
   getTaskOwnerTtlSeconds,
   hashTaskSessionId,
@@ -1106,13 +1111,28 @@ export async function POST(request: Request) {
               },
             });
           } catch (tokenError) {
+            const normalizedError = normalizeRealtimeError(tokenError);
             chatDebug("trigger_realtime_token_failed", {
               chatId: id,
               runId,
-              error:
-                tokenError instanceof Error
-                  ? tokenError.message
-                  : String(tokenError || "unknown"),
+              error: normalizedError.errorMessage,
+            });
+            console.error("[chat-api][realtime] public_token_create_failed", {
+              chatId: id,
+              runId,
+              streamId: TRIGGER_REALTIME_STREAM_ID,
+              apiUrlHost: normalizeRealtimeApiHost(TRIGGER_REALTIME_API_URL),
+              tokenTtl: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
+              ...normalizedError,
+            });
+          }
+          if (!realtimePublicAccessToken) {
+            console.error("[chat-api][realtime] public_token_missing", {
+              chatId: id,
+              runId,
+              streamId: TRIGGER_REALTIME_STREAM_ID,
+              apiUrlHost: normalizeRealtimeApiHost(TRIGGER_REALTIME_API_URL),
+              tokenTtl: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
             });
           }
           chatDebug("trigger_task_submitted", {
@@ -1156,6 +1176,19 @@ export async function POST(request: Request) {
                 : {}),
             },
           });
+          if (realtimePublicAccessToken) {
+            const tokenMeta = await buildRealtimeTokenLogMeta(
+              realtimePublicAccessToken
+            );
+            chatDebug("trigger_realtime_auth_emitted", {
+              chatId: id,
+              runId,
+              streamId: TRIGGER_REALTIME_STREAM_ID,
+              apiUrlHost: normalizeRealtimeApiHost(TRIGGER_REALTIME_API_URL),
+              tokenTtl: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
+              ...tokenMeta,
+            });
+          }
           dataStream.write({
             type: "reasoning-start",
             id: taskInfoReasoningId,

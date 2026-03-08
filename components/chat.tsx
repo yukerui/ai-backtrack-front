@@ -28,6 +28,11 @@ import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import {
+  buildRealtimeTokenLogMeta,
+  normalizeRealtimeApiHost,
+  normalizeRealtimeError,
+} from "@/lib/realtime-log";
+import {
   decideTaskRecovery,
   shouldRetryRealtimeStreamError,
 } from "@/lib/task-recovery";
@@ -116,6 +121,14 @@ type TaskRealtimeMeta = {
 
 type TaskRuntimeMeta = TaskPollingMeta & {
   realtime: TaskRealtimeMeta | null;
+};
+
+type RealtimeFailureLogInput = {
+  phase: "stream" | "status";
+  runId: string;
+  taskMeta: TaskRuntimeMeta;
+  error: unknown;
+  willRetry: boolean;
 };
 
 type DataTaskAuthPart = {
@@ -526,6 +539,45 @@ function normalizeTaskRealtimeMeta(value: unknown): TaskRealtimeMeta | null {
   }
 
   return { apiUrl, publicAccessToken, streamId, readTimeoutSeconds };
+}
+
+async function logRealtimeSubscriptionFailure({
+  phase,
+  runId,
+  taskMeta,
+  error,
+  willRetry,
+}: RealtimeFailureLogInput) {
+  const fallbackTokenMeta = {
+    tokenPresent: false,
+    tokenPrefix: "",
+    tokenHash: "",
+    tokenLength: 0,
+  };
+  let tokenMeta = fallbackTokenMeta;
+  try {
+    tokenMeta = await buildRealtimeTokenLogMeta(
+      taskMeta.realtime?.publicAccessToken || ""
+    );
+  } catch (_) {
+    tokenMeta = fallbackTokenMeta;
+  }
+
+  const normalizedError = normalizeRealtimeError(error);
+  const eventName =
+    phase === "stream"
+      ? "realtime_stream_subscribe_failed"
+      : "realtime_status_subscribe_failed";
+  console.error(`[chat-ui][realtime] ${eventName}`, {
+    runId,
+    streamId: taskMeta.realtime?.streamId || DEFAULT_TRIGGER_STREAM_ID,
+    apiUrlHost: normalizeRealtimeApiHost(
+      taskMeta.realtime?.apiUrl || DEFAULT_TRIGGER_REALTIME_API_URL
+    ),
+    willRetry,
+    ...tokenMeta,
+    ...normalizedError,
+  });
 }
 
 function extractTaskRuntimeMetaFromMessage(
@@ -1443,6 +1495,13 @@ export function Chat({
             return;
           }
           const shouldRetry = shouldRetryRealtimeStreamError(error);
+          await logRealtimeSubscriptionFailure({
+            phase: "stream",
+            runId,
+            taskMeta,
+            error,
+            willRetry: shouldRetry,
+          });
           if (shouldRetry && realtimeRunIdsRef.current.has(runId)) {
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, REALTIME_STREAM_RETRY_DELAY_MS);
@@ -1493,6 +1552,13 @@ export function Chat({
           }
         }
       } catch (error) {
+        await logRealtimeSubscriptionFailure({
+          phase: "status",
+          runId,
+          taskMeta,
+          error,
+          willRetry: false,
+        });
         console.error(`[chat-ui] Realtime status failed for ${runId}:`, error);
         const decision = decideTaskRecovery({
           reason: "realtime_status_error",
