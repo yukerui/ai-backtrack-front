@@ -27,6 +27,7 @@ import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
+import { decideTaskRecovery } from "@/lib/task-recovery";
 import type {
   Attachment,
   BacktestArtifactItem,
@@ -1359,10 +1360,14 @@ export function Chat({
     }
 
     if (!taskMeta.realtime) {
-      setRealtimeIssue({
-        runId,
-        message: "未拿到实时订阅令牌，请点击“手动补拉”。",
+      const decision = decideTaskRecovery({
+        reason: "missing_realtime",
+        hasCursorSig: Boolean(taskMeta.cursorSig),
       });
+      setRealtimeIssue({ runId, message: decision.issueMessage });
+      if (decision.shouldStartPolling) {
+        startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
+      }
       return;
     }
 
@@ -1452,11 +1457,15 @@ export function Chat({
             return;
           }
           console.error(`[chat-ui] Realtime stream failed for ${runId}:`, error);
-          setRealtimeIssue({
-            runId,
-            message: "实时通道异常，请点击“手动补拉”。",
+          const decision = decideTaskRecovery({
+            reason: "realtime_stream_error",
+            hasCursorSig: Boolean(taskMeta.cursorSig),
           });
+          setRealtimeIssue({ runId, message: decision.issueMessage });
           stopRealtimeRun(runId);
+          if (decision.shouldStartPolling) {
+            startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
+          }
           return;
         }
       }
@@ -1492,11 +1501,15 @@ export function Chat({
         }
       } catch (error) {
         console.error(`[chat-ui] Realtime status failed for ${runId}:`, error);
-        setRealtimeIssue({
-          runId,
-          message: "实时状态订阅失败，请点击“手动补拉”。",
+        const decision = decideTaskRecovery({
+          reason: "realtime_status_error",
+          hasCursorSig: Boolean(taskMeta.cursorSig),
         });
+        setRealtimeIssue({ runId, message: decision.issueMessage });
         stopRealtimeRun(runId);
+        if (decision.shouldStartPolling) {
+          startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
+        }
       }
     };
 
