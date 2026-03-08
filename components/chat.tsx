@@ -27,7 +27,10 @@ import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import { decideTaskRecovery } from "@/lib/task-recovery";
+import {
+  decideTaskRecovery,
+  shouldRetryRealtimeStreamError,
+} from "@/lib/task-recovery";
 import type {
   Attachment,
   BacktestArtifactItem,
@@ -47,6 +50,7 @@ import type { VisibilityType } from "./visibility-selector";
 const TASK_AUTH_PATTERN =
   "\\[\\[task-auth:([A-Za-z0-9_-]+):([0-9]+):([A-Za-z0-9._-]+)\\]\\]";
 const TASK_POLL_INTERVAL_MS = 2000;
+const REALTIME_STREAM_RETRY_DELAY_MS = 1200;
 const DEFAULT_TRIGGER_REALTIME_API_URL = "https://api.trigger.dev";
 const DEFAULT_TRIGGER_STREAM_ID = "fund-chat-realtime";
 const DEFAULT_TRIGGER_STREAM_TIMEOUT_SECONDS = 60;
@@ -1437,6 +1441,13 @@ export function Chat({
         } catch (error) {
           if (error instanceof DOMException && error.name === "AbortError") {
             return;
+          }
+          const shouldRetry = shouldRetryRealtimeStreamError(error);
+          if (shouldRetry && realtimeRunIdsRef.current.has(runId)) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, REALTIME_STREAM_RETRY_DELAY_MS);
+            });
+            continue;
           }
           console.error(`[chat-ui] Realtime stream failed for ${runId}:`, error);
           const decision = decideTaskRecovery({

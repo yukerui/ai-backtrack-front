@@ -13,6 +13,32 @@ export type TaskRecoveryDecision = {
   issueMessage: string;
 };
 
+const RETRYABLE_REALTIME_STREAM_PATTERNS = [
+  /\b404\b/i,
+  /stream\s+not\s+found/i,
+  /not\s+found/i,
+  /could\s+not\s+fetch\s+stream/i,
+  /failed\s+to\s+fetch/i,
+];
+
+export function shouldRetryRealtimeStreamError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const message =
+    "message" in error && typeof error.message === "string"
+      ? error.message
+      : String(error);
+  if (!message.trim()) {
+    return false;
+  }
+
+  return RETRYABLE_REALTIME_STREAM_PATTERNS.some((pattern) =>
+    pattern.test(message)
+  );
+}
+
 export function decideTaskRecovery(
   input: TaskRecoveryInput
 ): TaskRecoveryDecision {

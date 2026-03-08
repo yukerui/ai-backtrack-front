@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decideTaskRecovery } from "../../lib/task-recovery";
+import {
+  decideTaskRecovery,
+  shouldRetryRealtimeStreamError,
+} from "../../lib/task-recovery";
 
 test("missing realtime token should fallback to polling when cursor signature exists", () => {
   const decision = decideTaskRecovery({
@@ -36,4 +39,24 @@ test("should keep manual recovery when cursor signature is missing", () => {
   });
 
   assert.equal(decision.shouldStartPolling, false);
+});
+
+test("should retry realtime stream when stream is not ready yet", () => {
+  assert.equal(
+    shouldRetryRealtimeStreamError(new Error("404 stream not found")),
+    true
+  );
+  assert.equal(
+    shouldRetryRealtimeStreamError(
+      new Error("Could not fetch stream: status=404")
+    ),
+    true
+  );
+});
+
+test("should not retry realtime stream on auth failure", () => {
+  assert.equal(
+    shouldRetryRealtimeStreamError(new Error("401 unauthorized")),
+    false
+  );
 });
