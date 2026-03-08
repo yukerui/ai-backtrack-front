@@ -19,6 +19,11 @@ export type RealtimeErrorLogMeta = {
   cfRay: string;
 };
 
+export type RealtimeTokenRunScopeMeta = {
+  allowed: boolean;
+  scopes: string[];
+};
+
 function toRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -28,6 +33,20 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function normalizeToken(value: string | null | undefined): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function decodeBase64Url(input: string): string {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = normalized.length % 4;
+  const withPadding =
+    padding === 0 ? normalized : `${normalized}${"=".repeat(4 - padding)}`;
+  if (typeof atob === "function") {
+    return atob(withPadding);
+  }
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(withPadding, "base64").toString("utf8");
+  }
+  return "";
 }
 
 function djb2Hex(input: string) {
@@ -85,6 +104,63 @@ export async function buildRealtimeTokenLogMeta(
     tokenHash: hash.slice(0, TOKEN_HASH_LOG_LENGTH),
     tokenLength: normalized.length,
   };
+}
+
+export function buildRealtimeTokenLogMetaSync(
+  token: string | null | undefined
+): RealtimeTokenLogMeta {
+  const normalized = normalizeToken(token);
+  if (!normalized) {
+    return {
+      tokenPresent: false,
+      tokenPrefix: "",
+      tokenHash: "",
+      tokenLength: 0,
+    };
+  }
+  return {
+    tokenPresent: true,
+    tokenPrefix: normalized.slice(0, TOKEN_PREFIX_LENGTH),
+    tokenHash: djb2Hex(normalized).slice(0, TOKEN_HASH_LOG_LENGTH),
+    tokenLength: normalized.length,
+  };
+}
+
+function parseTokenScopes(token: string): string[] {
+  const normalized = normalizeToken(token);
+  if (!normalized) {
+    return [];
+  }
+  const parts = normalized.split(".");
+  if (parts.length < 2 || !parts[1]) {
+    return [];
+  }
+  try {
+    const decoded = decodeBase64Url(parts[1]);
+    const payload = JSON.parse(decoded) as { scopes?: unknown };
+    if (!Array.isArray(payload.scopes)) {
+      return [];
+    }
+    return payload.scopes
+      .filter((scope): scope is string => typeof scope === "string")
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function validateRealtimeTokenRunScope(
+  token: string | null | undefined,
+  runId: string
+): RealtimeTokenRunScopeMeta {
+  const scopes = parseTokenScopes(normalizeToken(token));
+  const targetScope = `read:runs:${String(runId || "").trim()}`;
+  const allowed =
+    scopes.includes(targetScope) ||
+    scopes.includes("read:runs") ||
+    scopes.includes("read:runs:*");
+  return { allowed, scopes };
 }
 
 export function normalizeRealtimeApiHost(apiUrl: string): string {

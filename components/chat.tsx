@@ -29,8 +29,10 @@ import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import {
   buildRealtimeTokenLogMeta,
+  buildRealtimeTokenLogMetaSync,
   normalizeRealtimeApiHost,
   normalizeRealtimeError,
+  validateRealtimeTokenRunScope,
 } from "@/lib/realtime-log";
 import {
   decideTaskRecovery,
@@ -1403,6 +1405,37 @@ export function Chat({
         hasCursorSig: Boolean(taskMeta.cursorSig),
       });
       setRealtimeIssue({ runId, message: decision.issueMessage });
+      if (decision.shouldStartPolling) {
+        startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
+      }
+      return;
+    }
+
+    const scopeCheck = validateRealtimeTokenRunScope(
+      taskMeta.realtime.publicAccessToken,
+      runId
+    );
+    if (!scopeCheck.allowed) {
+      const tokenMeta = buildRealtimeTokenLogMetaSync(
+        taskMeta.realtime.publicAccessToken
+      );
+      console.error("[chat-ui][realtime] realtime_token_scope_mismatch", {
+        runId,
+        streamId: taskMeta.realtime.streamId || DEFAULT_TRIGGER_STREAM_ID,
+        apiUrlHost: normalizeRealtimeApiHost(
+          taskMeta.realtime.apiUrl || DEFAULT_TRIGGER_REALTIME_API_URL
+        ),
+        ...tokenMeta,
+        scopesPreview: scopeCheck.scopes.slice(0, 5),
+      });
+      const decision = decideTaskRecovery({
+        reason: "realtime_stream_error",
+        hasCursorSig: Boolean(taskMeta.cursorSig),
+      });
+      setRealtimeIssue({
+        runId,
+        message: "实时令牌与任务不匹配，已自动切换轮询同步。",
+      });
       if (decision.shouldStartPolling) {
         startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
       }
