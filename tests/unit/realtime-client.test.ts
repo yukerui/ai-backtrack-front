@@ -100,7 +100,7 @@ test("subscribeRealtimeRunStatus should call withAuth using run-scoped token", a
         runId,
         skipColumns: [...(options?.skipColumns ?? [])],
       });
-      return subscription as unknown;
+      return subscription;
     },
   });
 

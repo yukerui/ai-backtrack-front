@@ -112,7 +112,9 @@ test.describe("Attachment Upload", () => {
       .poll(() => Boolean(capturedBody), { timeout: 10_000 })
       .toBeTruthy();
 
-    const filePart = findLatestUserFilePart(capturedBody as ChatRequestBody);
+    const filePart = findLatestUserFilePart(
+      capturedBody as unknown as ChatRequestBody
+    );
     expect(filePart).toBeTruthy();
     expect(filePart?.url).toBe("https://blob.example.com/1700000000000-test.csv");
     expect(filePart?.name).toBe("1700000000000-test.csv");

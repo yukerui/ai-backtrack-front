@@ -13,7 +13,7 @@ type WithAuthConfig = {
 
 type WithAuthFn = <T>(
   config: WithAuthConfig,
-  fn: () => Promise<T> | T
+  fn: (...args: any[]) => Promise<T>
 ) => Promise<T>;
 
 type RealtimeStreamReadFn<TStream> = (
@@ -58,8 +58,8 @@ export async function readRealtimeRunStream<TStream = AsyncIterable<string>>({
   signal,
   timeoutInSeconds,
   realtime,
-  withAuth = triggerAuth.withAuth,
-  readStream = triggerStreams.read as RealtimeStreamReadFn<TStream>,
+  withAuth,
+  readStream,
 }: {
   runId: string;
   streamId: string;
@@ -70,8 +70,12 @@ export async function readRealtimeRunStream<TStream = AsyncIterable<string>>({
   readStream?: RealtimeStreamReadFn<TStream>;
 }): Promise<TStream> {
   const authConfig = normalizeAuthConfig(realtime);
-  return withAuth(authConfig, () =>
-    readStream(runId, streamId, { signal, timeoutInSeconds })
+  const withAuthFn = (withAuth ||
+    (triggerAuth.withAuth as unknown as WithAuthFn)) as WithAuthFn;
+  const readStreamFn = (readStream ||
+    (triggerStreams.read as unknown as RealtimeStreamReadFn<TStream>)) as RealtimeStreamReadFn<TStream>;
+  return withAuthFn(authConfig, async () =>
+    readStreamFn(runId, streamId, { signal, timeoutInSeconds })
   );
 }
 
@@ -79,8 +83,8 @@ export async function subscribeRealtimeRunStatus({
   runId,
   realtime,
   skipColumns,
-  withAuth = triggerAuth.withAuth,
-  subscribeToRun = triggerRuns.subscribeToRun as SubscribeToRunFn<RealtimeRunStatusSubscription>,
+  withAuth,
+  subscribeToRun,
 }: {
   runId: string;
   realtime: RealtimeScopedAuth;
@@ -89,9 +93,11 @@ export async function subscribeRealtimeRunStatus({
   subscribeToRun?: SubscribeToRunFn<RealtimeRunStatusSubscription>;
 }): Promise<RealtimeRunStatusSubscription> {
   const authConfig = normalizeAuthConfig(realtime);
-  return withAuth(authConfig, () =>
-    Promise.resolve(
-      subscribeToRun(runId, { stopOnCompletion: false, skipColumns })
-    )
+  const withAuthFn = (withAuth ||
+    (triggerAuth.withAuth as unknown as WithAuthFn)) as WithAuthFn;
+  const subscribeToRunFn = (subscribeToRun ||
+    (triggerRuns.subscribeToRun as unknown as SubscribeToRunFn<RealtimeRunStatusSubscription>)) as SubscribeToRunFn<RealtimeRunStatusSubscription>;
+  return withAuthFn(authConfig, async () =>
+    subscribeToRunFn(runId, { stopOnCompletion: false, skipColumns })
   );
 }
