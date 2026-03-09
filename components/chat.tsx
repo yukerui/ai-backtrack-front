@@ -35,6 +35,7 @@ import {
 } from "@/lib/realtime-client";
 import {
   decideTaskRecovery,
+  shouldRefreshRealtimeTokenOnError,
   shouldRetryRealtimeStreamError,
 } from "@/lib/task-recovery";
 import type {
@@ -60,6 +61,13 @@ const REALTIME_STREAM_RETRY_DELAY_MS = 1200;
 const DEFAULT_TRIGGER_REALTIME_API_URL = "https://api.trigger.dev";
 const DEFAULT_TRIGGER_STREAM_ID = "fund-chat-realtime";
 const DEFAULT_TRIGGER_STREAM_TIMEOUT_SECONDS = 60;
+const REALTIME_TOKEN_REFRESH_RETRY_DELAY_MS = 500;
+const TASK_COMPLETION_SYNC_MAX_RETRY = 1;
+const TASK_COMPLETION_SYNC_RETRYABLE_CAUSES = new Set([
+  "invalid_cursor_sig",
+  "stale_cursor_state",
+  "cursor_advance_conflict",
+]);
 const SUMMARY_MAX_CHARS = 18;
 const SUMMARY_COMMAND_OR_TECH_REGEX =
   /\b(?:ls|pwd|cd|rg|grep|find|sed|awk|cat|head|tail|wc|curl|wget|python3?|node|npm|pnpm|pip3?|git|ps|pkill|kill|chmod|chown|mv|cp|mkdir|touch|echo|date|sleep|which|source|export|env|printenv|set|bash|sh|command_execution|tool_call|tool_result|web_search|plan_update|reasoning-delta|item\.completed|item\.delta|item\.started|spawn|stdout|stderr)\b/i;
@@ -122,6 +130,22 @@ type TaskRealtimeMeta = {
 
 type TaskRuntimeMeta = TaskPollingMeta & {
   realtime: TaskRealtimeMeta | null;
+};
+
+type TaskCursorRefreshResponse = {
+  runId: string;
+  cursor: number;
+  cursorSig: string;
+};
+
+type TaskRealtimeTokenRefreshResponse = {
+  runId: string;
+  realtime?: {
+    apiUrl?: unknown;
+    publicAccessToken?: unknown;
+    streamId?: unknown;
+    readTimeoutSeconds?: unknown;
+  };
 };
 
 type RealtimeFailureLogInput = {
@@ -1327,12 +1351,15 @@ export function Chat({
 
   const syncCompletionFromTasksApi = async (
     runId: string,
-    messageId: string
+    messageId: string,
+    attempt = 0
   ) => {
-    if (completionSyncedRunsRef.current.has(runId)) {
+    if (attempt === 0 && completionSyncedRunsRef.current.has(runId)) {
       return;
     }
-    completionSyncedRunsRef.current.add(runId);
+    if (attempt === 0) {
+      completionSyncedRunsRef.current.add(runId);
+    }
     const meta = taskMetaByRunIdRef.current.get(runId);
     if (!meta) {
       applyTaskEventsToMessage(runId, messageId, [], true);
@@ -1352,7 +1379,71 @@ export function Chat({
       );
 
       if (!response.ok) {
-        throw new Error(`Task completion sync failed (${response.status})`);
+        let cause = "";
+        try {
+          const payload = (await response.json()) as { cause?: unknown };
+          if (typeof payload.cause === "string") {
+            cause = payload.cause.trim();
+          }
+        } catch {
+          cause = "";
+        }
+
+        if (
+          response.status === 403 &&
+          attempt < TASK_COMPLETION_SYNC_MAX_RETRY &&
+          TASK_COMPLETION_SYNC_RETRYABLE_CAUSES.has(cause)
+        ) {
+          try {
+            const refreshResponse = await fetch(`/api/tasks/${runId}/cursor`, {
+              method: "GET",
+              cache: "no-store",
+            });
+            if (refreshResponse.ok) {
+              const refreshed =
+                (await refreshResponse.json()) as TaskCursorRefreshResponse;
+              const refreshedCursor =
+                typeof refreshed.cursor === "number"
+                  ? Math.trunc(refreshed.cursor)
+                  : Number.NaN;
+              const refreshedSig =
+                typeof refreshed.cursorSig === "string"
+                  ? refreshed.cursorSig.trim()
+                  : "";
+
+              if (
+                Number.isFinite(refreshedCursor) &&
+                refreshedCursor >= 0 &&
+                refreshedSig
+              ) {
+                const currentMeta = taskMetaByRunIdRef.current.get(runId);
+                if (currentMeta) {
+                  taskMetaByRunIdRef.current.set(runId, {
+                    ...currentMeta,
+                    cursor: refreshedCursor,
+                    cursorSig: refreshedSig,
+                  });
+                }
+                pollingCursorRef.current.set(runId, refreshedCursor);
+                pollingCursorSigRef.current.set(runId, refreshedSig);
+                completionSyncedRunsRef.current.delete(runId);
+                await syncCompletionFromTasksApi(runId, messageId, attempt + 1);
+                return;
+              }
+            }
+          } catch (refreshError) {
+            console.error(
+              `[chat-ui] Task cursor refresh failed for ${runId}:`,
+              refreshError
+            );
+          }
+        }
+
+        throw new Error(
+          `Task completion sync failed (${response.status})${
+            cause ? `: ${cause}` : ""
+          }`
+        );
       }
 
       const payload = (await response.json()) as TaskStatusResponse;
@@ -1450,6 +1541,66 @@ export function Chat({
       apiUrl: taskMeta.realtime?.apiUrl || DEFAULT_TRIGGER_REALTIME_API_URL,
       publicAccessToken: taskMeta.realtime?.publicAccessToken || "",
     };
+    let realtimeTokenRefreshInFlight: Promise<boolean> | null = null;
+
+    const refreshRealtimeToken = async () => {
+      if (realtimeTokenRefreshInFlight) {
+        return realtimeTokenRefreshInFlight;
+      }
+
+      realtimeTokenRefreshInFlight = (async () => {
+        try {
+          const response = await fetch(`/api/tasks/${runId}/realtime-token`, {
+            method: "GET",
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            throw new Error(`Realtime token refresh failed (${response.status})`);
+          }
+          const payload =
+            (await response.json()) as TaskRealtimeTokenRefreshResponse;
+          const realtime = payload?.realtime;
+          const nextToken =
+            typeof realtime?.publicAccessToken === "string"
+              ? realtime.publicAccessToken.trim()
+              : "";
+          if (!nextToken) {
+            throw new Error("Realtime token refresh response missing token");
+          }
+
+          const nextApiUrl =
+            typeof realtime?.apiUrl === "string" && realtime.apiUrl.trim()
+              ? realtime.apiUrl.trim()
+              : realtimeAuth.apiUrl;
+
+          realtimeAuth.apiUrl = nextApiUrl;
+          realtimeAuth.publicAccessToken = nextToken;
+
+          const currentMeta = taskMetaByRunIdRef.current.get(runId);
+          if (currentMeta?.realtime) {
+            taskMetaByRunIdRef.current.set(runId, {
+              ...currentMeta,
+              realtime: {
+                ...currentMeta.realtime,
+                apiUrl: nextApiUrl,
+                publicAccessToken: nextToken,
+              },
+            });
+          }
+          return true;
+        } catch (error) {
+          console.error(
+            `[chat-ui] Realtime token refresh failed for ${runId}:`,
+            error
+          );
+          return false;
+        } finally {
+          realtimeTokenRefreshInFlight = null;
+        }
+      })();
+
+      return realtimeTokenRefreshInFlight;
+    };
 
     const consumeRealtimeStream = async () => {
       while (!unmountedRef.current && realtimeRunIdsRef.current.has(runId)) {
@@ -1521,14 +1672,24 @@ export function Chat({
           if (error instanceof DOMException && error.name === "AbortError") {
             return;
           }
+          const tokenExpired = shouldRefreshRealtimeTokenOnError(error);
           const shouldRetry = shouldRetryRealtimeStreamError(error);
           await logRealtimeSubscriptionFailure({
             phase: "stream",
             runId,
             taskMeta,
             error,
-            willRetry: shouldRetry,
+            willRetry: tokenExpired || shouldRetry,
           });
+          if (tokenExpired && realtimeRunIdsRef.current.has(runId)) {
+            const refreshed = await refreshRealtimeToken();
+            if (refreshed && realtimeRunIdsRef.current.has(runId)) {
+              await new Promise<void>((resolve) => {
+                window.setTimeout(resolve, REALTIME_TOKEN_REFRESH_RETRY_DELAY_MS);
+              });
+              continue;
+            }
+          }
           if (shouldRetry && realtimeRunIdsRef.current.has(runId)) {
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, REALTIME_STREAM_RETRY_DELAY_MS);
@@ -1551,50 +1712,74 @@ export function Chat({
     };
 
     const watchRunStatus = async () => {
-      try {
-        const subscription = await subscribeRealtimeRunStatusWithAuth({
-          runId,
-          realtime: realtimeAuth,
-          skipColumns: ["payload", "output"],
-        });
-        realtimeRunSubscriptionsRef.current.set(runId, subscription);
-        for await (const run of subscription) {
-          if (!realtimeRunIdsRef.current.has(runId)) {
+      while (!unmountedRef.current && realtimeRunIdsRef.current.has(runId)) {
+        let subscription:
+          | Awaited<ReturnType<typeof subscribeRealtimeRunStatusWithAuth>>
+          | null = null;
+        try {
+          subscription = await subscribeRealtimeRunStatusWithAuth({
+            runId,
+            realtime: realtimeAuth,
+            skipColumns: ["payload", "output"],
+          });
+          realtimeRunSubscriptionsRef.current.set(runId, subscription);
+          for await (const run of subscription) {
+            if (!realtimeRunIdsRef.current.has(runId)) {
+              return;
+            }
+            if (run.isFailed) {
+              replaceTaskMessageText(runId, messageId, `任务执行失败：${run.status}`);
+              setRealtimeIssue({
+                runId,
+                message: `实时任务失败：${run.status}。可点击“手动补拉”确认最终状态。`,
+              });
+              stopRealtimeRun(runId);
+              return;
+            }
+            if (run.isCompleted) {
+              await syncCompletionFromTasksApi(runId, messageId);
+              stopRealtimeRun(runId);
+              return;
+            }
+          }
+        } catch (error) {
+          const tokenExpired = shouldRefreshRealtimeTokenOnError(error);
+          await logRealtimeSubscriptionFailure({
+            phase: "status",
+            runId,
+            taskMeta,
+            error,
+            willRetry: tokenExpired,
+          });
+          if (tokenExpired && realtimeRunIdsRef.current.has(runId)) {
+            const refreshed = await refreshRealtimeToken();
+            if (refreshed && realtimeRunIdsRef.current.has(runId)) {
+              await new Promise<void>((resolve) => {
+                window.setTimeout(resolve, REALTIME_TOKEN_REFRESH_RETRY_DELAY_MS);
+              });
+              continue;
+            }
+          }
+          console.error(`[chat-ui] Realtime status failed for ${runId}:`, error);
+          const decision = decideTaskRecovery({
+            reason: "realtime_status_error",
+            hasCursorSig: Boolean(taskMeta.cursorSig),
+          });
+          setRealtimeIssue({ runId, message: decision.issueMessage });
+          stopRealtimeRun(runId);
+          if (decision.shouldStartPolling) {
+            startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
+          }
+          return;
+        } finally {
+          if (subscription) {
+            const activeSubscription =
+              realtimeRunSubscriptionsRef.current.get(runId);
+            if (activeSubscription === subscription) {
+              realtimeRunSubscriptionsRef.current.delete(runId);
+            }
             subscription.unsubscribe();
-            return;
           }
-          if (run.isFailed) {
-            replaceTaskMessageText(runId, messageId, `任务执行失败：${run.status}`);
-            setRealtimeIssue({
-              runId,
-              message: `实时任务失败：${run.status}。可点击“手动补拉”确认最终状态。`,
-            });
-            stopRealtimeRun(runId);
-            return;
-          }
-          if (run.isCompleted) {
-            await syncCompletionFromTasksApi(runId, messageId);
-            stopRealtimeRun(runId);
-            return;
-          }
-        }
-      } catch (error) {
-        await logRealtimeSubscriptionFailure({
-          phase: "status",
-          runId,
-          taskMeta,
-          error,
-          willRetry: false,
-        });
-        console.error(`[chat-ui] Realtime status failed for ${runId}:`, error);
-        const decision = decideTaskRecovery({
-          reason: "realtime_status_error",
-          hasCursorSig: Boolean(taskMeta.cursorSig),
-        });
-        setRealtimeIssue({ runId, message: decision.issueMessage });
-        stopRealtimeRun(runId);
-        if (decision.shouldStartPolling) {
-          startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
         }
       }
     };

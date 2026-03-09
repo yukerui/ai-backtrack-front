@@ -13,6 +13,12 @@ export type TaskRecoveryDecision = {
   issueMessage: string;
 };
 
+const TOKEN_EXPIRED_PATTERNS = [
+  /public\s+access\s+token\s+has\s+expired/i,
+  /\btoken\s+has\s+expired\b/i,
+  /\bjwt\s+expired\b/i,
+];
+
 const RETRYABLE_REALTIME_STREAM_PATTERNS = [
   /\b404\b/i,
   /stream\s+not\s+found/i,
@@ -21,6 +27,92 @@ const RETRYABLE_REALTIME_STREAM_PATTERNS = [
   /could\s+not\s+subscribe\s+to\s+stream/i,
   /failed\s+to\s+fetch/i,
 ];
+
+function collectErrorText(
+  value: unknown,
+  bucket: string[],
+  seen: Set<unknown>,
+  depth: number
+) {
+  if (!value || depth > 3 || seen.has(value)) {
+    return;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (normalized) {
+      bucket.push(normalized);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 10)) {
+      collectErrorText(item, bucket, seen, depth + 1);
+    }
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const keys = [
+    "message",
+    "error",
+    "detail",
+    "details",
+    "cause",
+    "statusText",
+    "body",
+    "data",
+    "response",
+  ];
+  for (const key of keys) {
+    collectErrorText(record[key], bucket, seen, depth + 1);
+  }
+}
+
+function extractStatusCode(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const record = error as Record<string, unknown>;
+  if (typeof record.status === "number" && Number.isFinite(record.status)) {
+    return Math.trunc(record.status);
+  }
+  if (
+    record.response &&
+    typeof record.response === "object" &&
+    typeof (record.response as Record<string, unknown>).status === "number"
+  ) {
+    return Math.trunc(
+      (record.response as Record<string, number>).status
+    );
+  }
+  return null;
+}
+
+export function shouldRefreshRealtimeTokenOnError(error: unknown) {
+  const texts: string[] = [];
+  collectErrorText(error, texts, new Set<unknown>(), 0);
+  if (texts.length === 0 && error instanceof Error && error.message.trim()) {
+    texts.push(error.message.trim());
+  }
+
+  const matchedExpiredPattern = texts.some((text) =>
+    TOKEN_EXPIRED_PATTERNS.some((pattern) => pattern.test(text))
+  );
+  if (matchedExpiredPattern) {
+    return true;
+  }
+
+  const statusCode = extractStatusCode(error);
+  if (statusCode !== 401) {
+    return false;
+  }
+  return texts.some((text) => /token|unauthorized|auth/i.test(text));
+}
 
 export function shouldRetryRealtimeStreamError(error: unknown) {
   if (!error || typeof error !== "object") {

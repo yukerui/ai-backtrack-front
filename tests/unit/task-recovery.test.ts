@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   decideTaskRecovery,
+  shouldRefreshRealtimeTokenOnError,
   shouldRetryRealtimeStreamError,
 } from "../../lib/task-recovery";
 
@@ -63,6 +64,42 @@ test("should retry realtime stream when stream is not ready yet", () => {
 test("should not retry realtime stream on auth failure", () => {
   assert.equal(
     shouldRetryRealtimeStreamError(new Error("401 unauthorized")),
+    false
+  );
+});
+
+test("should detect realtime token expired from direct error message", () => {
+  assert.equal(
+    shouldRefreshRealtimeTokenOnError(
+      new Error(
+        "Public Access Token has expired. See https://trigger.dev/docs/frontend/overview#authentication for more information."
+      )
+    ),
+    true
+  );
+});
+
+test("should detect realtime token expired from nested api error payload", () => {
+  assert.equal(
+    shouldRefreshRealtimeTokenOnError({
+      status: 401,
+      body: {
+        error:
+          "Public Access Token has expired. See https://trigger.dev/docs/frontend/overview#authentication for more information.",
+      },
+      message: "Unauthorized",
+    }),
+    true
+  );
+});
+
+test("should not treat non-expired permission errors as refreshable", () => {
+  assert.equal(
+    shouldRefreshRealtimeTokenOnError(
+      new Error(
+        "Unauthorized: Public Access Token is missing required permissions."
+      )
+    ),
     false
   );
 });
