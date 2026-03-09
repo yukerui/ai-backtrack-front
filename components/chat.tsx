@@ -4,11 +4,6 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  configure as configureTriggerClient,
-  runs as triggerRuns,
-  streams as triggerStreams,
-} from "@trigger.dev/sdk/v3";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -34,6 +29,10 @@ import {
   normalizeRealtimeError,
   validateRealtimeTokenRunScope,
 } from "@/lib/realtime-log";
+import {
+  readRealtimeRunStream as readRealtimeRunStreamWithAuth,
+  subscribeRealtimeRunStatus as subscribeRealtimeRunStatusWithAuth,
+} from "@/lib/realtime-client";
 import {
   decideTaskRecovery,
   shouldRetryRealtimeStreamError,
@@ -1447,28 +1446,23 @@ export function Chat({
     realtimeRunIdsRef.current.add(runId);
     const streamController = new AbortController();
     realtimeStreamAbortControllersRef.current.set(runId, streamController);
-
-    const configureRealtimeClient = () => {
-      configureTriggerClient({
-        baseURL: taskMeta.realtime?.apiUrl || DEFAULT_TRIGGER_REALTIME_API_URL,
-        accessToken: taskMeta.realtime?.publicAccessToken || "",
-      });
+    const realtimeAuth = {
+      apiUrl: taskMeta.realtime?.apiUrl || DEFAULT_TRIGGER_REALTIME_API_URL,
+      publicAccessToken: taskMeta.realtime?.publicAccessToken || "",
     };
 
     const consumeRealtimeStream = async () => {
       while (!unmountedRef.current && realtimeRunIdsRef.current.has(runId)) {
         try {
-          configureRealtimeClient();
-          const stream = await triggerStreams.read<string>(
+          const stream = await readRealtimeRunStreamWithAuth({
             runId,
-            taskMeta.realtime?.streamId || DEFAULT_TRIGGER_STREAM_ID,
-            {
-              signal: streamController.signal,
-              timeoutInSeconds:
-                taskMeta.realtime?.readTimeoutSeconds ||
-                DEFAULT_TRIGGER_STREAM_TIMEOUT_SECONDS,
-            }
-          );
+            streamId: taskMeta.realtime?.streamId || DEFAULT_TRIGGER_STREAM_ID,
+            signal: streamController.signal,
+            timeoutInSeconds:
+              taskMeta.realtime?.readTimeoutSeconds ||
+              DEFAULT_TRIGGER_STREAM_TIMEOUT_SECONDS,
+            realtime: realtimeAuth,
+          });
           for await (const rawChunk of stream) {
             if (!realtimeRunIdsRef.current.has(runId)) {
               return;
@@ -1558,9 +1552,9 @@ export function Chat({
 
     const watchRunStatus = async () => {
       try {
-        configureRealtimeClient();
-        const subscription = triggerRuns.subscribeToRun(runId, {
-          stopOnCompletion: false,
+        const subscription = await subscribeRealtimeRunStatusWithAuth({
+          runId,
+          realtime: realtimeAuth,
           skipColumns: ["payload", "output"],
         });
         realtimeRunSubscriptionsRef.current.set(runId, subscription);

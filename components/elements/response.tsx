@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentProps } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, defaultRemarkPlugins } from "streamdown";
 import { cn } from "@/lib/utils";
 
 type ResponseProps = ComponentProps<typeof Streamdown>;
@@ -9,6 +9,26 @@ type ResponseProps = ComponentProps<typeof Streamdown>;
 const LATEX_SIGNAL_REGEX = /\\[a-zA-Z]+|[_^]/;
 const FENCED_CODE_BLOCK_REGEX = /```[\s\S]*?```/g;
 const ESCAPED_BLOCK_MATH_REGEX = /\\\[\s*([\s\S]*?)\s*\\\]/g;
+
+const STREAMDOWN_REMARK_PLUGINS = [
+  defaultRemarkPlugins.gfm,
+  defaultRemarkPlugins.cjkAutolinkBoundary,
+  [
+    Array.isArray(defaultRemarkPlugins.math)
+      ? defaultRemarkPlugins.math[0]
+      : defaultRemarkPlugins.math,
+    {
+      ...(Array.isArray(defaultRemarkPlugins.math) &&
+      typeof defaultRemarkPlugins.math[1] === "object" &&
+      defaultRemarkPlugins.math[1] !== null
+        ? (defaultRemarkPlugins.math[1] as Record<string, unknown>)
+        : {}),
+      singleDollarTextMath: true,
+    },
+  ],
+  defaultRemarkPlugins.cjkFriendly,
+  defaultRemarkPlugins.cjkFriendlyGfmStrikethrough,
+].filter(Boolean) as NonNullable<ResponseProps["remarkPlugins"]>;
 
 function normalizeBracketMathLine(line: string) {
   const trimmed = line.trim();
@@ -74,6 +94,7 @@ export function Response({ className, children, ...props }: ResponseProps) {
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_code]:whitespace-pre-wrap [&_code]:break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto",
         className
       )}
+      remarkPlugins={STREAMDOWN_REMARK_PLUGINS}
       {...props}
     >
       {normalizedChildren}
