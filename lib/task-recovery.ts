@@ -60,12 +60,14 @@ function collectErrorText(
   const keys = [
     "message",
     "error",
+    "errors",
     "detail",
     "details",
     "cause",
     "statusText",
     "body",
     "data",
+    "result",
     "response",
   ];
   for (const key of keys) {
@@ -73,22 +75,62 @@ function collectErrorText(
   }
 }
 
+function parseStatusCode(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const matched = normalized.match(/\b(\d{3})\b/);
+  if (!matched) {
+    return null;
+  }
+  const parsed = Number.parseInt(matched[1], 10);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function extractStatusFromRecord(record: Record<string, unknown>) {
+  const statusFields = ["status", "statusCode", "httpStatus", "code"];
+  for (const key of statusFields) {
+    const parsed = parseStatusCode(record[key]);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 function extractStatusCode(error: unknown) {
   if (!error || typeof error !== "object") {
     return null;
   }
-  const record = error as Record<string, unknown>;
-  if (typeof record.status === "number" && Number.isFinite(record.status)) {
-    return Math.trunc(record.status);
-  }
-  if (
-    record.response &&
-    typeof record.response === "object" &&
-    typeof (record.response as Record<string, unknown>).status === "number"
-  ) {
-    return Math.trunc(
-      (record.response as Record<string, number>).status
-    );
+  const queue: Record<string, unknown>[] = [error as Record<string, unknown>];
+  const seen = new Set<unknown>();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const direct = extractStatusFromRecord(current);
+    if (direct !== null) {
+      return direct;
+    }
+    const nestedKeys = ["response", "cause", "error", "body", "data", "result"];
+    for (const key of nestedKeys) {
+      const candidate = current[key];
+      if (candidate && typeof candidate === "object") {
+        queue.push(candidate as Record<string, unknown>);
+      }
+    }
   }
   return null;
 }
@@ -108,10 +150,10 @@ export function shouldRefreshRealtimeTokenOnError(error: unknown) {
   }
 
   const statusCode = extractStatusCode(error);
-  if (statusCode !== 401) {
-    return false;
+  if (statusCode === 401) {
+    return true;
   }
-  return texts.some((text) => /token|unauthorized|auth/i.test(text));
+  return false;
 }
 
 export function shouldRetryRealtimeStreamError(error: unknown) {
