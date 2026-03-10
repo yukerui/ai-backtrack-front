@@ -7,18 +7,48 @@ test.describe("Model Selector", () => {
     await page.goto("/");
   });
 
-  test("does not display model selector controls", async ({ page }) => {
+  test("displays a model button", async ({ page }) => {
     const modelButton = page
       .locator("button")
-      .filter({ hasText: MODEL_BUTTON_REGEX });
-    await expect(modelButton).toHaveCount(0);
-    await expect(page.getByPlaceholder("Search models...")).toHaveCount(0);
+      .filter({ hasText: MODEL_BUTTON_REGEX })
+      .first();
+    await expect(modelButton).toBeVisible();
   });
 
-  test("message send still works without selector", async ({ page }) => {
-    const input = page.getByTestId("multimodal-input");
-    await input.fill("hello without selector");
-    await page.getByTestId("send-button").click();
-    await expect(page).toHaveURL(/\/chat\/[\w-]+/, { timeout: 10_000 });
+  test("opens model selector popover on click", async ({ page }) => {
+    const modelButton = page
+      .locator("button")
+      .filter({ hasText: MODEL_BUTTON_REGEX })
+      .first();
+
+    await modelButton.click();
+    await expect(page.getByPlaceholder("Search models...")).toBeVisible();
+  });
+
+  test("shows model provider groups", async ({ page }) => {
+    const modelButton = page
+      .locator("button")
+      .filter({ hasText: MODEL_BUTTON_REGEX })
+      .first();
+
+    await modelButton.click();
+    await expect(page.getByText("Anthropic")).toBeVisible();
+    await expect(page.getByText("OpenAI")).toBeVisible();
+    await expect(page.getByText("Google")).toBeVisible();
+  });
+
+  test("can select a different model", async ({ page }) => {
+    const modelButton = page
+      .locator("button")
+      .filter({ hasText: MODEL_BUTTON_REGEX })
+      .first();
+
+    await modelButton.click();
+    await page.getByText("gpt-5.2-codex").first().click();
+
+    await expect(page.getByPlaceholder("Search models...")).not.toBeVisible();
+    await expect(
+      page.locator("button").filter({ hasText: "gpt-5.2-codex" }).first()
+    ).toBeVisible();
   });
 });

@@ -3,6 +3,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
+import { CheckIcon } from "lucide-react";
 import {
   type ChangeEvent,
   type Dispatch,
@@ -15,15 +16,27 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorTrigger,
+} from "@/components/ai-elements/model-selector";
+import {
+  chatModels,
+  DEFAULT_CHAT_MODEL,
+  modelsByProvider,
+  selectableModelIds,
+} from "@/lib/ai/models";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   PromptInput,
-  PromptInputModelSelect,
-  PromptInputModelSelectContent,
-  PromptInputModelSelectItem,
-  PromptInputModelSelectTrigger,
-  PromptInputModelSelectValue,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputToolbar,
@@ -37,22 +50,20 @@ import { TurnstileWidget } from "./turnstile-widget";
 import type { VisibilityType } from "./visibility-selector";
 
 const CHAT_MODEL_STORAGE_KEY = "chat-model";
-const REASONING_LEVEL_STORAGE_KEY = "chat-reasoning-level";
-const CHAT_MODEL_OPTIONS = ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4"] as const;
-const REASONING_LEVEL_OPTIONS = ["high", "xhigh"] as const;
-const DEFAULT_CHAT_MODEL = "gpt-5.3-codex";
-const DEFAULT_REASONING_LEVEL = "xhigh";
 
-type ChatModelOption = (typeof CHAT_MODEL_OPTIONS)[number];
-type ReasoningLevelOption = (typeof REASONING_LEVEL_OPTIONS)[number];
+const PROVIDER_NAMES: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+  xai: "xAI",
+};
 
-const isChatModelOption = (value: string): value is ChatModelOption =>
-  CHAT_MODEL_OPTIONS.includes(value as ChatModelOption);
-
-const isReasoningLevelOption = (
-  value: string
-): value is ReasoningLevelOption =>
-  REASONING_LEVEL_OPTIONS.includes(value as ReasoningLevelOption);
+function setChatModelCookie(modelId: string) {
+  const maxAge = 60 * 60 * 24 * 365;
+  document.cookie = `${CHAT_MODEL_STORAGE_KEY}=${encodeURIComponent(
+    modelId
+  )}; path=/; max-age=${maxAge}`;
+}
 
 function PureMultimodalInput({
   chatId,
@@ -129,33 +140,16 @@ function PureMultimodalInput({
     CHAT_MODEL_STORAGE_KEY,
     DEFAULT_CHAT_MODEL
   );
-  const [selectedReasoningLevel, setSelectedReasoningLevel] =
-    useLocalStorage<string>(REASONING_LEVEL_STORAGE_KEY, DEFAULT_REASONING_LEVEL);
 
-  const normalizedChatModel = isChatModelOption(selectedChatModel)
+  const normalizedChatModel = selectableModelIds.has(selectedChatModel)
     ? selectedChatModel
     : DEFAULT_CHAT_MODEL;
-  const normalizedReasoningLevel = isReasoningLevelOption(
-    selectedReasoningLevel
-  )
-    ? selectedReasoningLevel
-    : DEFAULT_REASONING_LEVEL;
 
   useEffect(() => {
     if (normalizedChatModel !== selectedChatModel) {
       setSelectedChatModel(normalizedChatModel);
     }
   }, [normalizedChatModel, selectedChatModel, setSelectedChatModel]);
-
-  useEffect(() => {
-    if (normalizedReasoningLevel !== selectedReasoningLevel) {
-      setSelectedReasoningLevel(normalizedReasoningLevel);
-    }
-  }, [
-    normalizedReasoningLevel,
-    selectedReasoningLevel,
-    setSelectedReasoningLevel,
-  ]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -201,8 +195,7 @@ function PureMultimodalInput({
       ],
     }, {
       body: {
-        model: normalizedChatModel,
-        reasoningLevel: normalizedReasoningLevel,
+        selectedChatModel: normalizedChatModel,
       },
     });
 
@@ -219,7 +212,6 @@ function PureMultimodalInput({
     setInput,
     attachments,
     normalizedChatModel,
-    normalizedReasoningLevel,
     sendMessage,
     setAttachments,
     setLocalStorageInput,
@@ -431,37 +423,14 @@ function PureMultimodalInput({
         </div>
         <PromptInputToolbar className="border-top-0! border-t-0! p-0 shadow-none dark:border-0 dark:border-transparent!">
           <PromptInputTools className="gap-0 sm:gap-0.5">
-            <PromptInputModelSelect
-              onValueChange={setSelectedChatModel}
-              value={normalizedChatModel}
-            >
-              <PromptInputModelSelectTrigger aria-label="Model">
-                <PromptInputModelSelectValue placeholder="Model" />
-              </PromptInputModelSelectTrigger>
-              <PromptInputModelSelectContent>
-                {CHAT_MODEL_OPTIONS.map((model) => (
-                  <PromptInputModelSelectItem key={model} value={model}>
-                    {model}
-                  </PromptInputModelSelectItem>
-                ))}
-              </PromptInputModelSelectContent>
-            </PromptInputModelSelect>
-            <PromptInputModelSelect
-              onValueChange={setSelectedReasoningLevel}
-              value={normalizedReasoningLevel}
-            >
-              <PromptInputModelSelectTrigger aria-label="Reasoning Level">
-                <PromptInputModelSelectValue placeholder="Reasoning" />
-              </PromptInputModelSelectTrigger>
-              <PromptInputModelSelectContent>
-                {REASONING_LEVEL_OPTIONS.map((level) => (
-                  <PromptInputModelSelectItem key={level} value={level}>
-                    {level}
-                  </PromptInputModelSelectItem>
-                ))}
-              </PromptInputModelSelectContent>
-            </PromptInputModelSelect>
             <AttachmentsButton fileInputRef={fileInputRef} status={status} />
+            <ModelSelectorCompact
+              onModelChange={(modelId) => {
+                setSelectedChatModel(modelId);
+                setChatModelCookie(modelId);
+              }}
+              selectedModelId={normalizedChatModel}
+            />
           </PromptInputTools>
 
           {status === "submitted" ? (
@@ -549,6 +518,81 @@ function PureAttachmentsButton({
 }
 
 const AttachmentsButton = memo(PureAttachmentsButton);
+
+function PureModelSelectorCompact({
+  selectedModelId,
+  onModelChange,
+}: {
+  selectedModelId: string;
+  onModelChange: (modelId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const selectedModel =
+    chatModels.find((model) => model.id === selectedModelId) ??
+    chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL) ??
+    chatModels[0];
+  const selectedProvider = selectedModel?.provider || "openai";
+
+  return (
+    <ModelSelector onOpenChange={setOpen} open={open}>
+      <ModelSelectorTrigger asChild>
+        <Button
+          aria-label="Model"
+          className="h-8 max-w-[220px] justify-start gap-2 px-2 text-foreground"
+          variant="ghost"
+        >
+          <ModelSelectorLogo provider={selectedProvider} />
+          <ModelSelectorName>{selectedModel?.name || "Model"}</ModelSelectorName>
+        </Button>
+      </ModelSelectorTrigger>
+      <ModelSelectorContent>
+        <ModelSelectorInput placeholder="Search models..." />
+        <ModelSelectorList>
+          {Object.entries(modelsByProvider).map(([provider, models]) => (
+            <ModelSelectorGroup
+              className={
+                provider === "openai"
+                  ? undefined
+                  : "[&_[cmdk-group-heading]]:text-muted-foreground/60 opacity-60"
+              }
+              heading={PROVIDER_NAMES[provider] || provider}
+              key={provider}
+            >
+              {models.map((model) => {
+                const isDisabled = Boolean(model.disabled);
+
+                return (
+                  <ModelSelectorItem
+                    className={isDisabled ? "cursor-not-allowed opacity-60" : undefined}
+                    disabled={isDisabled}
+                    key={model.id}
+                    onSelect={() => {
+                      if (isDisabled) {
+                        return;
+                      }
+                      onModelChange(model.id);
+                      setOpen(false);
+                    }}
+                    value={`${model.name} ${model.provider} ${model.id}`}
+                  >
+                    <ModelSelectorLogo provider={model.provider} />
+                    <ModelSelectorName>{model.name}</ModelSelectorName>
+                    {model.id === selectedModel?.id ? (
+                      <CheckIcon className="ml-auto size-4" />
+                    ) : null}
+                  </ModelSelectorItem>
+                );
+              })}
+            </ModelSelectorGroup>
+          ))}
+        </ModelSelectorList>
+      </ModelSelectorContent>
+    </ModelSelector>
+  );
+}
+
+const ModelSelectorCompact = memo(PureModelSelectorCompact);
 
 function PureStopButton({
   stop,
