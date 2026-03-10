@@ -19,6 +19,11 @@ import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   PromptInput,
+  PromptInputModelSelect,
+  PromptInputModelSelectContent,
+  PromptInputModelSelectItem,
+  PromptInputModelSelectTrigger,
+  PromptInputModelSelectValue,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputToolbar,
@@ -30,6 +35,24 @@ import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
 import { TurnstileWidget } from "./turnstile-widget";
 import type { VisibilityType } from "./visibility-selector";
+
+const CHAT_MODEL_STORAGE_KEY = "chat-model";
+const REASONING_LEVEL_STORAGE_KEY = "chat-reasoning-level";
+const CHAT_MODEL_OPTIONS = ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4"] as const;
+const REASONING_LEVEL_OPTIONS = ["high", "xhigh"] as const;
+const DEFAULT_CHAT_MODEL = "gpt-5.3-codex";
+const DEFAULT_REASONING_LEVEL = "xhigh";
+
+type ChatModelOption = (typeof CHAT_MODEL_OPTIONS)[number];
+type ReasoningLevelOption = (typeof REASONING_LEVEL_OPTIONS)[number];
+
+const isChatModelOption = (value: string): value is ChatModelOption =>
+  CHAT_MODEL_OPTIONS.includes(value as ChatModelOption);
+
+const isReasoningLevelOption = (
+  value: string
+): value is ReasoningLevelOption =>
+  REASONING_LEVEL_OPTIONS.includes(value as ReasoningLevelOption);
 
 function PureMultimodalInput({
   chatId,
@@ -102,6 +125,37 @@ function PureMultimodalInput({
     "input",
     ""
   );
+  const [selectedChatModel, setSelectedChatModel] = useLocalStorage<string>(
+    CHAT_MODEL_STORAGE_KEY,
+    DEFAULT_CHAT_MODEL
+  );
+  const [selectedReasoningLevel, setSelectedReasoningLevel] =
+    useLocalStorage<string>(REASONING_LEVEL_STORAGE_KEY, DEFAULT_REASONING_LEVEL);
+
+  const normalizedChatModel = isChatModelOption(selectedChatModel)
+    ? selectedChatModel
+    : DEFAULT_CHAT_MODEL;
+  const normalizedReasoningLevel = isReasoningLevelOption(
+    selectedReasoningLevel
+  )
+    ? selectedReasoningLevel
+    : DEFAULT_REASONING_LEVEL;
+
+  useEffect(() => {
+    if (normalizedChatModel !== selectedChatModel) {
+      setSelectedChatModel(normalizedChatModel);
+    }
+  }, [normalizedChatModel, selectedChatModel, setSelectedChatModel]);
+
+  useEffect(() => {
+    if (normalizedReasoningLevel !== selectedReasoningLevel) {
+      setSelectedReasoningLevel(normalizedReasoningLevel);
+    }
+  }, [
+    normalizedReasoningLevel,
+    selectedReasoningLevel,
+    setSelectedReasoningLevel,
+  ]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -145,6 +199,11 @@ function PureMultimodalInput({
           text: input,
         },
       ],
+    }, {
+      body: {
+        model: normalizedChatModel,
+        reasoningLevel: normalizedReasoningLevel,
+      },
     });
 
     setAttachments([]);
@@ -159,6 +218,8 @@ function PureMultimodalInput({
     input,
     setInput,
     attachments,
+    normalizedChatModel,
+    normalizedReasoningLevel,
     sendMessage,
     setAttachments,
     setLocalStorageInput,
@@ -370,6 +431,36 @@ function PureMultimodalInput({
         </div>
         <PromptInputToolbar className="border-top-0! border-t-0! p-0 shadow-none dark:border-0 dark:border-transparent!">
           <PromptInputTools className="gap-0 sm:gap-0.5">
+            <PromptInputModelSelect
+              onValueChange={setSelectedChatModel}
+              value={normalizedChatModel}
+            >
+              <PromptInputModelSelectTrigger aria-label="Model">
+                <PromptInputModelSelectValue placeholder="Model" />
+              </PromptInputModelSelectTrigger>
+              <PromptInputModelSelectContent>
+                {CHAT_MODEL_OPTIONS.map((model) => (
+                  <PromptInputModelSelectItem key={model} value={model}>
+                    {model}
+                  </PromptInputModelSelectItem>
+                ))}
+              </PromptInputModelSelectContent>
+            </PromptInputModelSelect>
+            <PromptInputModelSelect
+              onValueChange={setSelectedReasoningLevel}
+              value={normalizedReasoningLevel}
+            >
+              <PromptInputModelSelectTrigger aria-label="Reasoning Level">
+                <PromptInputModelSelectValue placeholder="Reasoning" />
+              </PromptInputModelSelectTrigger>
+              <PromptInputModelSelectContent>
+                {REASONING_LEVEL_OPTIONS.map((level) => (
+                  <PromptInputModelSelectItem key={level} value={level}>
+                    {level}
+                  </PromptInputModelSelectItem>
+                ))}
+              </PromptInputModelSelectContent>
+            </PromptInputModelSelect>
             <AttachmentsButton fileInputRef={fileInputRef} status={status} />
           </PromptInputTools>
 
