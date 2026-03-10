@@ -79,6 +79,11 @@ export const maxDuration = 300;
 const DEFAULT_BACKEND = "claude_proxy";
 const FIXED_CHAT_MODEL =
   process.env.CODEX_MODEL || process.env.CLAUDE_CODE_MODEL || "gpt-5.3-codex";
+const CLAUDE_PROXY_SUPPORTED_MODELS = new Set([
+  "gpt-5.2-codex",
+  "gpt-5.3-codex",
+  "gpt-5.4",
+]);
 const USE_TRIGGER_DEV =
   (process.env.USE_TRIGGER_DEV || "false").toLowerCase() === "true";
 const CHAT_API_DEBUG_VERBOSE =
@@ -103,6 +108,14 @@ function isQuotaDisabled() {
   return (
     (process.env.DISABLE_CHAT_DAILY_QUOTA || "false").toLowerCase() === "true"
   );
+}
+
+function resolveClaudeProxyModel(selectedChatModel?: string) {
+  const requestedModel = selectedChatModel?.trim() || "";
+  if (CLAUDE_PROXY_SUPPORTED_MODELS.has(requestedModel)) {
+    return requestedModel;
+  }
+  return FIXED_CHAT_MODEL;
 }
 
 function extractTextFromParts(
@@ -357,12 +370,14 @@ async function precheckClaudeProxyInput({
   userText,
   userType,
   turnstileToken,
+  model,
 }: {
   chatId: string;
   isNewChat: boolean;
   userText: string;
   userType: UserType;
   turnstileToken?: string;
+  model: string;
 }): Promise<ClaudeProxyPrecheckResult> {
   const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
   const base = rawBase.replace(/\/+$/, "");
@@ -382,6 +397,7 @@ async function precheckClaudeProxyInput({
       ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
     },
     body: JSON.stringify({
+      model,
       text: userText,
       turnstileToken: turnstileToken || undefined,
       messages: [{ role: "user", content: userText }],
@@ -446,6 +462,7 @@ async function streamFromClaudeProxy({
   attachments,
   userType,
   turnstileToken,
+  model,
 }: {
   dataStream: any;
   chatId: string;
@@ -454,6 +471,7 @@ async function streamFromClaudeProxy({
   attachments: LatestUserAttachment[];
   userType: UserType;
   turnstileToken?: string;
+  model: string;
 }) {
   const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
   const base = rawBase.replace(/\/+$/, "");
@@ -474,7 +492,7 @@ async function streamFromClaudeProxy({
       ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
     },
     body: JSON.stringify({
-      model: FIXED_CHAT_MODEL,
+      model,
       stream: true,
       userText,
       attachments,
@@ -899,12 +917,6 @@ export async function POST(request: Request) {
           request.headers.get("cf-turnstile-response")
       )} body=${Boolean(turnstileTokenFromBody)} cookie=${Boolean(turnstileTokenFromCookie)}`
     );
-    chatDebug("backend_selected", {
-      backend,
-      useTriggerDev: USE_TRIGGER_DEV,
-      isToolApprovalFlow,
-      hasTurnstileToken: Boolean(turnstileToken),
-    });
     if (backend === "claude_proxy" && !USE_TRIGGER_DEV && !turnstileToken) {
       return Response.json(
         {
@@ -924,11 +936,20 @@ export async function POST(request: Request) {
       city,
       country,
     };
+    const claudeProxyModel = resolveClaudeProxyModel(selectedChatModel);
 
     const modelId =
       backend === "gateway"
         ? selectedChatModel || DEFAULT_CHAT_MODEL
-        : FIXED_CHAT_MODEL;
+        : claudeProxyModel;
+    chatDebug("backend_selected", {
+      backend,
+      useTriggerDev: USE_TRIGGER_DEV,
+      isToolApprovalFlow,
+      hasTurnstileToken: Boolean(turnstileToken),
+      selectedChatModel: selectedChatModel || "",
+      effectiveModel: modelId,
+    });
     let triggerAssistantTextForPersistence = "";
     let persistedTriggerAssistantMessageId: string | null = null;
     let triggerAssistantPersistedInExecute = false;
@@ -1027,6 +1048,7 @@ export async function POST(request: Request) {
             userText: latestUserText,
             userType,
             turnstileToken,
+            model: claudeProxyModel,
           });
           chatDebug("trigger_precheck_done", {
             chatId: id,
@@ -1070,7 +1092,7 @@ export async function POST(request: Request) {
               chatId: id,
               userText: latestUserText,
               attachments: latestUserAttachments,
-              model: FIXED_CHAT_MODEL,
+              model: claudeProxyModel,
               isNewChat: !chat,
               turnstileToken: turnstileToken || undefined,
               policyPrechecked: true,
@@ -1469,6 +1491,7 @@ export async function POST(request: Request) {
             attachments: latestUserAttachments,
             userType,
             turnstileToken,
+            model: claudeProxyModel,
           });
         }
 
