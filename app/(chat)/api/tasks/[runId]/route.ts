@@ -168,7 +168,9 @@ async function retrieveRunWithRetry(
   let lastError: unknown;
   for (let attempt = 0; attempt <= RUN_RETRIEVE_RETRIES; attempt += 1) {
     try {
-      return await runs.retrieve<typeof fundChatTask>(runId, { clientConfig });
+      return await triggerAuth.withAuth(clientConfig, () =>
+        runs.retrieve<typeof fundChatTask>(runId)
+      );
     } catch (error) {
       lastError = error;
       if (!isTimeoutLikeError(error) || attempt >= RUN_RETRIEVE_RETRIES) {

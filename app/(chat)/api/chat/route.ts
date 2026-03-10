@@ -1329,14 +1329,12 @@ export async function POST(request: Request) {
             };
 
             try {
-              const run = await runs.poll<typeof fundChatTask>(
-                runId,
-                {
-                  pollIntervalMs: 1500,
-                },
-                {
-                  clientConfig: triggerClientConfig,
-                }
+              const run = await triggerAuth.withAuth(
+                triggerClientConfig,
+                () =>
+                  runs.poll<typeof fundChatTask>(runId, {
+                    pollIntervalMs: 1500,
+                  })
               );
 
               let pendingMessageId = await getTaskRunMessageId(runId);
