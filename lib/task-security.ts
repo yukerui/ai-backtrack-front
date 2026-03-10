@@ -19,6 +19,7 @@ export type TaskRunOwnerRecord = {
   userId: string;
   sidHash: string;
   createdAt: number;
+  triggerAccountId?: string;
 };
 
 type TaskCursorClaims = {
@@ -197,11 +198,13 @@ export async function saveTaskRunOwner({
   runId,
   userId,
   sidHash,
+  triggerAccountId,
   ttlSeconds = getTaskOwnerTtlSeconds(),
 }: {
   runId: string;
   userId: string;
   sidHash: string;
+  triggerAccountId?: string;
   ttlSeconds?: number;
 }) {
   const client = getRedisClient();
@@ -209,6 +212,9 @@ export async function saveTaskRunOwner({
     userId,
     sidHash,
     createdAt: Date.now(),
+    ...(typeof triggerAccountId === "string" && triggerAccountId.trim()
+      ? { triggerAccountId: triggerAccountId.trim() }
+      : {}),
   };
   await client.set(taskOwnerKey(runId), value, { ex: ttlSeconds });
 }
@@ -239,7 +245,15 @@ export async function getTaskRunOwner(runId: string) {
   ) {
     return null;
   }
-  return parsed as TaskRunOwnerRecord;
+  return {
+    userId: parsed.userId,
+    sidHash: parsed.sidHash,
+    createdAt: parsed.createdAt,
+    ...(typeof parsed.triggerAccountId === "string" &&
+    parsed.triggerAccountId.trim()
+      ? { triggerAccountId: parsed.triggerAccountId.trim() }
+      : {}),
+  } satisfies TaskRunOwnerRecord;
 }
 
 export async function saveTaskRunMessageId({

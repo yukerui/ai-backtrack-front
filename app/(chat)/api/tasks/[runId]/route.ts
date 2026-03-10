@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/app/(auth)/auth";
-import { runs } from "@trigger.dev/sdk";
+import { auth as triggerAuth, runs } from "@trigger.dev/sdk";
 import type { fundChatTask } from "@/trigger/fund-chat-task";
 import {
   decodeFundChatRealtimeChunk,
@@ -26,6 +26,10 @@ import {
   signTaskCursor,
   verifyTaskCursorSignature,
 } from "@/lib/task-security";
+import {
+  resolveTriggerAccountById,
+  toTriggerClientConfig,
+} from "@/lib/trigger-accounts";
 
 type RawTaskOutput =
   | string
@@ -157,11 +161,14 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function retrieveRunWithRetry(runId: string) {
+async function retrieveRunWithRetry(
+  runId: string,
+  clientConfig: { baseURL: string; accessToken: string }
+) {
   let lastError: unknown;
   for (let attempt = 0; attempt <= RUN_RETRIEVE_RETRIES; attempt += 1) {
     try {
-      return await runs.retrieve<typeof fundChatTask>(runId);
+      return await runs.retrieve<typeof fundChatTask>(runId, { clientConfig });
     } catch (error) {
       lastError = error;
       if (!isTimeoutLikeError(error) || attempt >= RUN_RETRIEVE_RETRIES) {
@@ -173,15 +180,21 @@ async function retrieveRunWithRetry(runId: string) {
   throw lastError instanceof Error ? lastError : new Error(String(lastError || "runs_retrieve_failed"));
 }
 
-async function readRealtimeSnapshot(runId: string, cursor: number) {
+async function readRealtimeSnapshot(
+  runId: string,
+  cursor: number,
+  clientConfig: { baseURL: string; accessToken: string }
+) {
   const chunks: FundChatRealtimeChunk[] = [];
   let nextCursor = cursor;
   try {
     const startIndex = cursor > 0 ? cursor + 1 : undefined;
-    const streamChunks = await fundChatRealtimeStream.read(runId, {
-      timeoutInSeconds: 1,
-      ...(typeof startIndex === "number" ? { startIndex } : {}),
-    });
+    const streamChunks = await triggerAuth.withAuth(clientConfig, async () =>
+      fundChatRealtimeStream.read(runId, {
+        timeoutInSeconds: 1,
+        ...(typeof startIndex === "number" ? { startIndex } : {}),
+      })
+    );
 
     for await (const rawChunk of streamChunks) {
       nextCursor += 1;
@@ -305,6 +318,17 @@ export async function GET(
   if (owner.sidHash !== taskSessionHash) {
     return forbiddenTaskAccess("task_session_mismatch");
   }
+  const triggerAccount = resolveTriggerAccountById(owner.triggerAccountId);
+  if (!triggerAccount) {
+    return NextResponse.json(
+      {
+        error: "Trigger account not configured",
+        cause: "trigger_account_not_configured",
+      },
+      { status: 500 }
+    );
+  }
+  const triggerClientConfig = toTriggerClientConfig(triggerAccount);
 
   const isCursorSigValid = verifyTaskCursorSignature({
     token: cursorSig,
@@ -324,7 +348,11 @@ export async function GET(
     return forbiddenTaskAccess("stale_cursor_state");
   }
 
-  const realtimeSnapshot = await readRealtimeSnapshot(runId, cursor);
+  const realtimeSnapshot = await readRealtimeSnapshot(
+    runId,
+    cursor,
+    triggerClientConfig
+  );
   const nextCursor = realtimeSnapshot.nextCursor;
   const nextCursorSig = signTaskCursor({
     runId,
@@ -346,7 +374,7 @@ export async function GET(
 
   let run: Awaited<ReturnType<typeof runs.retrieve<typeof fundChatTask>>>;
   try {
-    run = await retrieveRunWithRetry(runId);
+    run = await retrieveRunWithRetry(runId, triggerClientConfig);
   } catch (error) {
     const legacy = toLegacyDeltaText(realtimeSnapshot.events);
     const message = error instanceof Error ? error.message : String(error || "runs_retrieve_failed");

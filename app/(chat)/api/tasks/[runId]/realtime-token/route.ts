@@ -10,10 +10,12 @@ import {
   hashTaskSessionId,
   readTaskSessionIdFromCookieHeader,
 } from "@/lib/task-security";
+import {
+  resolveTriggerAccountById,
+  toTriggerClientConfig,
+} from "@/lib/trigger-accounts";
 
 const TRIGGER_REALTIME_STREAM_ID = "fund-chat-realtime";
-const TRIGGER_REALTIME_API_URL =
-  process.env.TRIGGER_API_URL || "https://api.trigger.dev";
 const TRIGGER_REALTIME_PUBLIC_TOKEN_TTL =
   process.env.TRIGGER_REALTIME_PUBLIC_TOKEN_TTL || "30m";
 const TRIGGER_REALTIME_READ_TIMEOUT_SECONDS = normalizeRealtimeTimeoutSeconds(
@@ -53,24 +55,39 @@ export async function GET(
   if (owner.sidHash !== taskSessionHash) {
     return forbiddenTaskAccess("task_session_mismatch");
   }
+  const triggerAccount = resolveTriggerAccountById(owner.triggerAccountId);
+  if (!triggerAccount) {
+    return NextResponse.json(
+      {
+        error: "Trigger account not configured",
+        cause: "trigger_account_not_configured",
+      },
+      { status: 500 }
+    );
+  }
+  const triggerClientConfig = toTriggerClientConfig(triggerAccount);
 
   try {
-    const publicAccessToken = await triggerAuth.createPublicToken({
-      scopes: {
-        read: {
-          runs: [runId],
-        },
-      },
-      expirationTime: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
-      realtime: {
-        skipColumns: ["payload", "output"],
-      },
-    });
+    const publicAccessToken = await triggerAuth.withAuth(
+      triggerClientConfig,
+      async () =>
+        triggerAuth.createPublicToken({
+          scopes: {
+            read: {
+              runs: [runId],
+            },
+          },
+          expirationTime: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
+          realtime: {
+            skipColumns: ["payload", "output"],
+          },
+        })
+    );
 
     return NextResponse.json({
       runId,
       realtime: {
-        apiUrl: TRIGGER_REALTIME_API_URL,
+        apiUrl: triggerAccount.apiUrl,
         publicAccessToken,
         streamId: TRIGGER_REALTIME_STREAM_ID,
         readTimeoutSeconds: TRIGGER_REALTIME_READ_TIMEOUT_SECONDS,
@@ -80,6 +97,7 @@ export async function GET(
     console.error("[tasks-realtime-token] create_public_token_failed", {
       runId,
       userId: session.user.id,
+      triggerAccountId: triggerAccount.id,
       error: error instanceof Error ? error.message : String(error || ""),
     });
     return NextResponse.json(

@@ -52,6 +52,10 @@ import {
   normalizeRealtimeTimeoutSeconds,
 } from "@/lib/realtime-timeout";
 import {
+  pickNextTriggerAccount,
+  toTriggerClientConfig,
+} from "@/lib/trigger-accounts";
+import {
   getTaskRunMessageId,
   getTaskOwnerTtlSeconds,
   hashTaskSessionId,
@@ -80,8 +84,6 @@ const USE_TRIGGER_DEV =
 const CHAT_API_DEBUG_VERBOSE =
   (process.env.CHAT_API_DEBUG_VERBOSE || "false").toLowerCase() === "true";
 const TRIGGER_REALTIME_STREAM_ID = "fund-chat-realtime";
-const TRIGGER_REALTIME_API_URL =
-  process.env.TRIGGER_API_URL || "https://api.trigger.dev";
 const TRIGGER_REALTIME_PUBLIC_TOKEN_TTL =
   process.env.TRIGGER_REALTIME_PUBLIC_TOKEN_TTL || "30m";
 const TRIGGER_REALTIME_READ_TIMEOUT_SECONDS = normalizeRealtimeTimeoutSeconds(
@@ -1058,6 +1060,8 @@ export async function POST(request: Request) {
             userText: latestUserText,
             attachments: latestUserAttachments,
           });
+          const triggerAccount = await pickNextTriggerAccount("fund-chat-task");
+          const triggerClientConfig = toTriggerClientConfig(triggerAccount);
           const handle = await tasks.trigger<typeof fundChatTask>(
             "fund-chat-task",
             {
@@ -1074,6 +1078,9 @@ export async function POST(request: Request) {
             {
               idempotencyKey: triggerIdempotencyKey,
               idempotencyKeyTTL: "10m",
+            },
+            {
+              clientConfig: triggerClientConfig,
             }
           );
           const runId = handle.id;
@@ -1089,6 +1096,7 @@ export async function POST(request: Request) {
             runId,
             userId: session.user.id,
             sidHash: taskSessionHash,
+            triggerAccountId: triggerAccount.id,
             ttlSeconds: taskOwnerTtlSeconds,
           });
           await initializeTaskCursorState({
@@ -1100,29 +1108,35 @@ export async function POST(request: Request) {
           });
           let realtimePublicAccessToken = "";
           try {
-            realtimePublicAccessToken = await triggerAuth.createPublicToken({
-              scopes: {
-                read: {
-                  runs: [runId],
-                },
-              },
-              expirationTime: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
-              realtime: {
-                skipColumns: ["payload", "output"],
-              },
-            });
+            realtimePublicAccessToken = await triggerAuth.withAuth(
+              triggerClientConfig,
+              async () =>
+                triggerAuth.createPublicToken({
+                  scopes: {
+                    read: {
+                      runs: [runId],
+                    },
+                  },
+                  expirationTime: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
+                  realtime: {
+                    skipColumns: ["payload", "output"],
+                  },
+                })
+            );
           } catch (tokenError) {
             const normalizedError = normalizeRealtimeError(tokenError);
             chatDebug("trigger_realtime_token_failed", {
               chatId: id,
               runId,
+              triggerAccountId: triggerAccount.id,
               error: normalizedError.errorMessage,
             });
             console.error("[chat-api][realtime] public_token_create_failed", {
               chatId: id,
               runId,
+              triggerAccountId: triggerAccount.id,
               streamId: TRIGGER_REALTIME_STREAM_ID,
-              apiUrlHost: normalizeRealtimeApiHost(TRIGGER_REALTIME_API_URL),
+              apiUrlHost: normalizeRealtimeApiHost(triggerAccount.apiUrl),
               tokenTtl: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
               ...normalizedError,
             });
@@ -1131,14 +1145,16 @@ export async function POST(request: Request) {
             console.error("[chat-api][realtime] public_token_missing", {
               chatId: id,
               runId,
+              triggerAccountId: triggerAccount.id,
               streamId: TRIGGER_REALTIME_STREAM_ID,
-              apiUrlHost: normalizeRealtimeApiHost(TRIGGER_REALTIME_API_URL),
+              apiUrlHost: normalizeRealtimeApiHost(triggerAccount.apiUrl),
               tokenTtl: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
             });
           }
           chatDebug("trigger_task_submitted", {
             chatId: id,
             runId,
+            triggerAccountId: triggerAccount.id,
             idempotencyKeyPrefix: triggerIdempotencyKey.slice(0, 12),
             taskSessionHashPrefix: taskSessionHash.slice(0, 12),
           });
@@ -1168,7 +1184,7 @@ export async function POST(request: Request) {
               ...(realtimePublicAccessToken
                 ? {
                     realtime: {
-                      apiUrl: TRIGGER_REALTIME_API_URL,
+                      apiUrl: triggerAccount.apiUrl,
                       publicAccessToken: realtimePublicAccessToken,
                       streamId: TRIGGER_REALTIME_STREAM_ID,
                       readTimeoutSeconds: TRIGGER_REALTIME_READ_TIMEOUT_SECONDS,
@@ -1184,8 +1200,9 @@ export async function POST(request: Request) {
             chatDebug("trigger_realtime_auth_emitted", {
               chatId: id,
               runId,
+              triggerAccountId: triggerAccount.id,
               streamId: TRIGGER_REALTIME_STREAM_ID,
-              apiUrlHost: normalizeRealtimeApiHost(TRIGGER_REALTIME_API_URL),
+              apiUrlHost: normalizeRealtimeApiHost(triggerAccount.apiUrl),
               tokenTtl: TRIGGER_REALTIME_PUBLIC_TOKEN_TTL,
               ...tokenMeta,
             });
@@ -1312,9 +1329,15 @@ export async function POST(request: Request) {
             };
 
             try {
-              const run = await runs.poll<typeof fundChatTask>(runId, {
-                pollIntervalMs: 1500,
-              });
+              const run = await runs.poll<typeof fundChatTask>(
+                runId,
+                {
+                  pollIntervalMs: 1500,
+                },
+                {
+                  clientConfig: triggerClientConfig,
+                }
+              );
 
               let pendingMessageId = await getTaskRunMessageId(runId);
               if (!pendingMessageId) {
