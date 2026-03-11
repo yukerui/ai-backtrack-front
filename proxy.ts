@@ -8,6 +8,7 @@ import {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const isAuthPage = ["/login", "/register"].includes(pathname);
 
   /*
    * Playwright starts the dev server and requires a 200 status to
@@ -27,6 +28,10 @@ export async function proxy(request: NextRequest) {
     secureCookie: !isDevelopmentEnvironment,
   });
 
+  if (!token && isAuthPage) {
+    return NextResponse.next();
+  }
+
   if (!token) {
     const redirectUrl = encodeURIComponent(request.url);
 
@@ -42,9 +47,14 @@ export async function proxy(request: NextRequest) {
   }
 
   const response = NextResponse.next();
-  const taskSessionCookie = request.cookies.get(TASK_SESSION_COOKIE_NAME)?.value;
+  const taskSessionCookie = request.cookies.get(
+    TASK_SESSION_COOKIE_NAME
+  )?.value;
   if (!taskSessionCookie) {
-    const sid = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
+    const sid = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(
+      /-/g,
+      ""
+    );
     response.cookies.set({
       name: TASK_SESSION_COOKIE_NAME,
       value: sid,

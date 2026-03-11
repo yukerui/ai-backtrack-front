@@ -98,7 +98,7 @@ export function SidebarUserNav({ user }: { user: User }) {
                     router.push("/login");
                   } else {
                     signOut({
-                      redirectTo: "/",
+                      redirectTo: "/login",
                     });
                   }
                 }}
