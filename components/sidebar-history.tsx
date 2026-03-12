@@ -24,6 +24,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import type { Chat } from "@/lib/db/schema";
+import { getClientErrorMessage } from "@/lib/errors";
+import { getChatHistoryState } from "@/lib/history-sidebar";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
@@ -108,6 +110,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     isValidating,
     isLoading,
     mutate,
+    error,
   } = useSWRInfinite<ChatHistory>(getChatHistoryPaginationKey, fetcher, {
     fallbackData: [],
   });
@@ -120,9 +123,12 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     ? paginatedChatHistories.some((page) => page.hasMore === false)
     : false;
 
-  const hasEmptyChatHistory = paginatedChatHistories
-    ? paginatedChatHistories.every((page) => page.chats.length === 0)
-    : false;
+  const historyState = getChatHistoryState({
+    userEmail: user.email,
+    isLoading,
+    hasError: Boolean(error),
+    pages: paginatedChatHistories,
+  });
 
   const handleDelete = () => {
     const chatToDelete = deleteId;
@@ -171,7 +177,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     );
   }
 
-  if (isLoading) {
+  if (historyState === "loading") {
     return (
       <SidebarGroup>
         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
@@ -200,12 +206,33 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     );
   }
 
-  if (hasEmptyChatHistory) {
+  if (historyState === "error") {
+    return (
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <div className="flex flex-col items-center gap-2 px-2 text-center text-sm text-zinc-500">
+            <div>{getClientErrorMessage(error)}</div>
+            <button
+              className="rounded-md border border-zinc-300 px-3 py-1 text-xs text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              onClick={() => mutate()}
+              type="button"
+            >
+              Retry
+            </button>
+          </div>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
+
+  if (historyState === "guest-empty" || historyState === "empty") {
     return (
       <SidebarGroup>
         <SidebarGroupContent>
           <div className="flex w-full flex-row items-center justify-center gap-2 px-2 text-sm text-zinc-500">
-            Your conversations will appear here once you start chatting!
+            {historyState === "guest-empty"
+              ? "Guest mode is active. History is tied to this browser session."
+              : "Your conversations will appear here once you start chatting!"}
           </div>
         </SidebarGroupContent>
       </SidebarGroup>
