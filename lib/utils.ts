@@ -26,6 +26,53 @@ export const fetcher = async (url: string) => {
   return response.json();
 };
 
+function getFallbackChatErrorCode(status: number): ErrorCode {
+  switch (status) {
+    case 401:
+      return "unauthorized:chat";
+    case 403:
+      return "forbidden:chat";
+    case 404:
+      return "not_found:chat";
+    case 429:
+      return "rate_limit:chat";
+    default:
+      return status >= 500 ? "offline:chat" : "bad_request:api";
+  }
+}
+
+async function normalizeChatTransportError(response: Response) {
+  const raw = await response.text().catch(() => "");
+  let parsed:
+    | Partial<{ code: unknown; cause: unknown; message: unknown }>
+    | null = null;
+
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw) as Partial<{
+        code: unknown;
+        cause: unknown;
+        message: unknown;
+      }>;
+    } catch {
+      parsed = null;
+    }
+  }
+
+  const code =
+    typeof parsed?.code === "string" && parsed.code.includes(":")
+      ? (parsed.code as ErrorCode)
+      : getFallbackChatErrorCode(response.status);
+  const cause =
+    typeof parsed?.cause === "string" && parsed.cause.trim()
+      ? parsed.cause
+      : typeof parsed?.message === "string" && parsed.message.trim()
+        ? parsed.message
+        : raw.trim() || response.statusText || undefined;
+
+  return new ChatSDKError(code, cause);
+}
+
 export async function fetchWithErrorHandlers(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -34,13 +81,12 @@ export async function fetchWithErrorHandlers(
     const response = await fetch(input, init);
 
     if (!response.ok) {
-      const { code, cause } = await response.json();
-      throw new ChatSDKError(code as ErrorCode, cause);
+      throw await normalizeChatTransportError(response);
     }
 
     return response;
   } catch (error: unknown) {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       throw new ChatSDKError('offline:chat');
     }
 
