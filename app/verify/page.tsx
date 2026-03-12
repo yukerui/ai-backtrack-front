@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { TurnstileVerificationPage } from "@/components/turnstile-verification-page";
 import {
   getTurnstileSiteKey,
@@ -13,6 +14,8 @@ type VerifyPageProps = {
 };
 
 export default async function Page({ searchParams }: VerifyPageProps) {
+  await connection();
+
   const [{ redirect: redirectParam }, cookieStore] = await Promise.all([
     searchParams,
     cookies(),
