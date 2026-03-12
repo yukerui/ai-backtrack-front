@@ -68,10 +68,8 @@ function PureArtifact({
   votes,
   isReadonly,
   selectedVisibilityType,
-  turnstileSiteKey,
-  turnstileToken,
-  onTurnstileTokenChange,
-  turnstileResetNonce,
+  turnstileRequired = false,
+  turnstileVerified = true,
 }: {
   addToolApprovalResponse: UseChatHelpers<ChatMessage>["addToolApprovalResponse"];
   chatId: string;
@@ -88,10 +86,8 @@ function PureArtifact({
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   isReadonly: boolean;
   selectedVisibilityType: VisibilityType;
-  turnstileSiteKey?: string;
-  turnstileToken?: string;
-  onTurnstileTokenChange?: (token: string) => void;
-  turnstileResetNonce?: number;
+  turnstileRequired?: boolean;
+  turnstileVerified?: boolean;
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
 
@@ -346,7 +342,6 @@ function PureArtifact({
                     className="bg-background dark:bg-muted"
                     input={input}
                     messages={messages}
-                    onTurnstileTokenChange={onTurnstileTokenChange}
                     selectedVisibilityType={selectedVisibilityType}
                     sendMessage={sendMessage}
                     setAttachments={setAttachments}
@@ -354,9 +349,8 @@ function PureArtifact({
                     setMessages={setMessages}
                     status={status}
                     stop={stop}
-                    turnstileResetNonce={turnstileResetNonce}
-                    turnstileSiteKey={turnstileSiteKey}
-                    turnstileToken={turnstileToken}
+                    turnstileRequired={turnstileRequired}
+                    turnstileVerified={turnstileVerified}
                   />
                 </div>
               </div>
@@ -536,13 +530,10 @@ export const Artifact = memo(PureArtifact, (prevProps, nextProps) => {
   if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
     return false;
   }
-  if (prevProps.turnstileSiteKey !== nextProps.turnstileSiteKey) {
+  if (prevProps.turnstileRequired !== nextProps.turnstileRequired) {
     return false;
   }
-  if (prevProps.turnstileToken !== nextProps.turnstileToken) {
-    return false;
-  }
-  if (prevProps.turnstileResetNonce !== nextProps.turnstileResetNonce) {
+  if (prevProps.turnstileVerified !== nextProps.turnstileVerified) {
     return false;
   }
 

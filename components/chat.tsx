@@ -52,6 +52,7 @@ import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
+import { TurnstileWidget } from "./turnstile-widget";
 import type { VisibilityType } from "./visibility-selector";
 
 const TASK_AUTH_PATTERN =
@@ -75,6 +76,10 @@ const SUMMARY_SHELL_TOKEN_REGEX =
   /(?:\|\||&&|;|\||`|\$\(|\$\{|\b--[a-z0-9_-]+\b|<<<?|>>>?)/i;
 const SUMMARY_PATH_REGEX = /(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]*/;
 const CJK_REGEX = /[\u3400-\u9fff]/;
+const TURNSTILE_SITE_KEY =
+  process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ||
+  process.env.NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY?.trim() ||
+  "";
 
 function mapReasoningTitleFromItemType(itemType: string) {
   const normalized = String(itemType || "").toLowerCase().trim();
@@ -835,6 +840,10 @@ export function Chat({
   const { setDataStream } = useDataStream();
 
   const [input, setInput] = useState<string>("");
+  const turnstileRequired = Boolean(TURNSTILE_SITE_KEY);
+  const [turnstileVerified, setTurnstileVerified] = useState(
+    !turnstileRequired
+  );
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
   const [realtimeIssue, setRealtimeIssue] = useState<{
     runId: string;
@@ -2122,6 +2131,20 @@ export function Chat({
         />
 
         <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+          {turnstileRequired ? (
+            <div className="px-2 pt-2">
+              <div className="rounded-xl border border-border bg-background/95 p-3 shadow-xs">
+                <div className="mb-2 text-xs text-muted-foreground">
+                  首次进入页面时需先完成一次 Cloudflare 验证。
+                </div>
+                <TurnstileWidget
+                  action="chat"
+                  onVerifiedChange={setTurnstileVerified}
+                  siteKey={TURNSTILE_SITE_KEY}
+                />
+              </div>
+            </div>
+          ) : null}
           {realtimeIssue ? (
             <div className="mb-2 flex w-full items-center justify-between rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
               <span>{realtimeIssue.message}</span>
@@ -2147,6 +2170,8 @@ export function Chat({
               setMessages={setMessages}
               status={status}
               stop={stop}
+              turnstileRequired={turnstileRequired}
+              turnstileVerified={turnstileVerified}
             />
           )}
         </div>
@@ -2167,6 +2192,8 @@ export function Chat({
         setMessages={setMessages}
         status={status}
         stop={stop}
+        turnstileRequired={turnstileRequired}
+        turnstileVerified={turnstileVerified}
         votes={votes}
       />
 

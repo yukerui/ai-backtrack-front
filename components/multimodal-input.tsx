@@ -46,7 +46,6 @@ import { ArrowUpIcon, PaperclipIcon, StopIcon } from "./icons";
 import { PreviewAttachment } from "./preview-attachment";
 import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
-import { TurnstileWidget } from "./turnstile-widget";
 import type { VisibilityType } from "./visibility-selector";
 
 const CHAT_MODEL_STORAGE_KEY = "chat-model";
@@ -78,10 +77,8 @@ function PureMultimodalInput({
   sendMessage,
   className,
   selectedVisibilityType,
-  turnstileSiteKey,
-  turnstileToken = "",
-  onTurnstileTokenChange = () => {},
-  turnstileResetNonce = 0,
+  turnstileRequired = false,
+  turnstileVerified = true,
 }: {
   chatId: string;
   input: string;
@@ -95,10 +92,8 @@ function PureMultimodalInput({
   sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
   className?: string;
   selectedVisibilityType: VisibilityType;
-  turnstileSiteKey?: string;
-  turnstileToken?: string;
-  onTurnstileTokenChange?: (token: string) => void;
-  turnstileResetNonce?: number;
+  turnstileRequired?: boolean;
+  turnstileVerified?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -174,7 +169,7 @@ function PureMultimodalInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
-  const turnstileReady = !turnstileSiteKey || Boolean(turnstileToken);
+  const turnstileReady = !turnstileRequired || Boolean(turnstileVerified);
 
   const submitForm = useCallback(() => {
     window.history.pushState({}, "", `/chat/${chatId}`);
@@ -340,7 +335,7 @@ function PureMultimodalInput({
           <SuggestedActions
             canSend={turnstileReady}
             chatId={chatId}
-            onRequireVerification={() => toast.error("请先通过 Turnstile 验证")}
+            onRequireVerification={() => toast.error("请先完成页面验证")}
             selectedVisibilityType={selectedVisibilityType}
             sendMessage={sendMessage}
           />
@@ -364,7 +359,7 @@ function PureMultimodalInput({
             return;
           }
           if (!turnstileReady) {
-            toast.error("请先通过 Turnstile 验证");
+            toast.error("请先完成页面验证");
             return;
           }
           if (status !== "ready") {
@@ -450,16 +445,6 @@ function PureMultimodalInput({
             </PromptInputSubmit>
           )}
         </PromptInputToolbar>
-        {turnstileSiteKey ? (
-          <div className="mt-2 border-t pt-2">
-            <TurnstileWidget
-              action="chat"
-              onTokenChange={onTurnstileTokenChange}
-              resetNonce={turnstileResetNonce}
-              siteKey={turnstileSiteKey}
-            />
-          </div>
-        ) : null}
       </PromptInput>
     </div>
   );
@@ -480,13 +465,10 @@ export const MultimodalInput = memo(
     if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
       return false;
     }
-    if (prevProps.turnstileSiteKey !== nextProps.turnstileSiteKey) {
+    if (prevProps.turnstileRequired !== nextProps.turnstileRequired) {
       return false;
     }
-    if (prevProps.turnstileToken !== nextProps.turnstileToken) {
-      return false;
-    }
-    if (prevProps.turnstileResetNonce !== nextProps.turnstileResetNonce) {
+    if (prevProps.turnstileVerified !== nextProps.turnstileVerified) {
       return false;
     }
 

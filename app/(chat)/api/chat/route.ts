@@ -275,20 +275,6 @@ function chatDebug(event: string, payload?: Record<string, unknown>) {
   console.log(`[chat-api][debug] ${event}`);
 }
 
-function getCookieValue(cookieHeader: string | null, key: string): string {
-  if (!cookieHeader) {
-    return "";
-  }
-  const parts = cookieHeader.split(";").map((x) => x.trim());
-  for (const part of parts) {
-    if (!part.startsWith(`${key}=`)) {
-      continue;
-    }
-    return decodeURIComponent(part.slice(key.length + 1));
-  }
-  return "";
-}
-
 function buildTaskSessionCookieHeader(taskSessionId: string) {
   const maxAgeSeconds = 30 * 24 * 60 * 60;
   const attributes = [
@@ -309,16 +295,6 @@ type ClaudeProxyPrecheckResult = {
   reason: string;
   reply: string;
 };
-
-function parseTurnstileReason(message: string) {
-  const match = String(message || "").match(
-    /Turnstile verification failed:\s*([a-zA-Z0-9_-]+)/i
-  );
-  if (!match?.[1]) {
-    return "";
-  }
-  return match[1].toLowerCase();
-}
 
 function normalizeThinkingActivityDelta(
   value: unknown,
@@ -369,14 +345,12 @@ async function precheckClaudeProxyInput({
   isNewChat,
   userText,
   userType,
-  turnstileToken,
   model,
 }: {
   chatId: string;
   isNewChat: boolean;
   userText: string;
   userType: UserType;
-  turnstileToken?: string;
   model: string;
 }): Promise<ClaudeProxyPrecheckResult> {
   const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
@@ -394,12 +368,10 @@ async function precheckClaudeProxyInput({
       "x-chat-id": chatId,
       "x-chat-new": isNewChat ? "true" : "false",
       "x-user-type": userType,
-      ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
     },
     body: JSON.stringify({
       model,
       text: userText,
-      turnstileToken: turnstileToken || undefined,
       messages: [{ role: "user", content: userText }],
     }),
   });
@@ -430,16 +402,6 @@ async function precheckClaudeProxyInput({
           response.statusText ||
           "该请求当前未通过策略校验，请调整后重试。";
 
-  const turnstileReasonFromReason = reason.startsWith("turnstile_")
-    ? reason.slice("turnstile_".length)
-    : "";
-  const turnstileReasonFromMessage = parseTurnstileReason(reply);
-  const turnstileReason =
-    turnstileReasonFromReason || turnstileReasonFromMessage;
-  if (turnstileReason) {
-    throw new Error(`turnstile_upstream:${turnstileReason}`);
-  }
-
   if (!response.ok) {
     throw new Error(
       `Claude proxy precheck failed (${response.status}): ${reply || response.statusText}`
@@ -461,7 +423,6 @@ async function streamFromClaudeProxy({
   userText,
   attachments,
   userType,
-  turnstileToken,
   model,
 }: {
   dataStream: any;
@@ -470,7 +431,6 @@ async function streamFromClaudeProxy({
   userText: string;
   attachments: LatestUserAttachment[];
   userType: UserType;
-  turnstileToken?: string;
   model: string;
 }) {
   const rawBase = process.env.CLAUDE_CODE_API_BASE || "http://127.0.0.1:15722";
@@ -489,7 +449,6 @@ async function streamFromClaudeProxy({
       "x-chat-id": chatId,
       "x-chat-new": isNewChat ? "true" : "false",
       "x-user-type": userType,
-      ...(turnstileToken ? { "x-turnstile-token": turnstileToken } : {}),
     },
     body: JSON.stringify({
       model,
@@ -515,13 +474,6 @@ async function streamFromClaudeProxy({
       }
     } catch {
       // ignore parse errors and fallback to raw text
-    }
-
-    const turnstileMatch = upstreamMessage.match(
-      /Turnstile verification failed:\s*([a-zA-Z0-9_-]+)/i
-    );
-    if (upstream.status === 403 && turnstileMatch?.[1]) {
-      throw new Error(`turnstile_upstream:${turnstileMatch[1].toLowerCase()}`);
     }
 
     throw new Error(
@@ -798,14 +750,9 @@ async function streamFromClaudeProxy({
 
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
-  let rawRequestBody: Record<string, unknown> | null = null;
 
   try {
     const json = await request.json();
-    rawRequestBody =
-      json && typeof json === "object"
-        ? (json as Record<string, unknown>)
-        : null;
     requestBody = postRequestBodySchema.parse(json);
   } catch (_) {
     return new ChatSDKError("bad_request:api").toResponse();
@@ -897,36 +844,6 @@ export async function POST(request: Request) {
     const backend = process.env.CHAT_BACKEND || DEFAULT_BACKEND;
     const latestUserText = extractLatestUserText(requestBody);
     const latestUserAttachments = extractLatestUserAttachments(requestBody);
-    const turnstileTokenFromBody =
-      typeof rawRequestBody?.turnstileToken === "string"
-        ? rawRequestBody.turnstileToken
-        : "";
-    const turnstileTokenFromCookie = getCookieValue(
-      request.headers.get("cookie"),
-      "turnstile_token"
-    );
-    const turnstileToken =
-      request.headers.get("x-turnstile-token") ||
-      request.headers.get("cf-turnstile-response") ||
-      turnstileTokenFromBody ||
-      turnstileTokenFromCookie ||
-      "";
-    console.log(
-      `[chat-api] turnstile header=${Boolean(
-        request.headers.get("x-turnstile-token") ||
-          request.headers.get("cf-turnstile-response")
-      )} body=${Boolean(turnstileTokenFromBody)} cookie=${Boolean(turnstileTokenFromCookie)}`
-    );
-    if (backend === "claude_proxy" && !USE_TRIGGER_DEV && !turnstileToken) {
-      return Response.json(
-        {
-          code: "forbidden:chat",
-          message: "请先通过 Turnstile 验证后再发送。",
-          cause: "turnstile_missing_token",
-        },
-        { status: 403 }
-      );
-    }
 
     const { longitude, latitude, city, country } = geolocation(request);
 
@@ -946,7 +863,6 @@ export async function POST(request: Request) {
       backend,
       useTriggerDev: USE_TRIGGER_DEV,
       isToolApprovalFlow,
-      hasTurnstileToken: Boolean(turnstileToken),
       selectedChatModel: selectedChatModel || "",
       effectiveModel: modelId,
     });
@@ -1047,7 +963,6 @@ export async function POST(request: Request) {
             isNewChat: !chat,
             userText: latestUserText,
             userType,
-            turnstileToken,
             model: claudeProxyModel,
           });
           chatDebug("trigger_precheck_done", {
@@ -1094,7 +1009,6 @@ export async function POST(request: Request) {
               attachments: latestUserAttachments,
               model: claudeProxyModel,
               isNewChat: !chat,
-              turnstileToken: turnstileToken || undefined,
               policyPrechecked: true,
             },
             {
@@ -1490,7 +1404,6 @@ export async function POST(request: Request) {
             userText: latestUserText,
             attachments: latestUserAttachments,
             userType,
-            turnstileToken,
             model: claudeProxyModel,
           });
         }
@@ -1581,17 +1494,20 @@ export async function POST(request: Request) {
           message: error instanceof Error ? error.message : String(error),
         });
         if (error instanceof Error) {
-          if (error.message.startsWith("turnstile_upstream:")) {
-            return "Turnstile 验证失败，请重新勾选后再发送。";
-          }
           if (error.message.includes("Claude proxy precheck failed (429)")) {
             return "请求过于频繁，请稍后重试。";
+          }
+          if (error.message.includes("Claude proxy precheck failed (403)")) {
+            return "请求被上游拦截，请确认页面验证已完成后重试。";
           }
           if (error.message.includes("Claude proxy precheck failed")) {
             return "请求预校验失败，请稍后重试。";
           }
           if (error.message.includes("Claude proxy upstream failed (429)")) {
             return "请求过于频繁，请稍后重试。";
+          }
+          if (error.message.includes("Claude proxy upstream failed (403)")) {
+            return "请求被上游拦截，请确认页面验证已完成后重试。";
           }
         }
         return "Oops, an error occurred!";
@@ -1635,14 +1551,14 @@ export async function POST(request: Request) {
 
     if (
       error instanceof Error &&
-      error.message?.startsWith("turnstile_upstream:")
+      (error.message?.includes("Claude proxy precheck failed (403)") ||
+        error.message?.includes("Claude proxy upstream failed (403)"))
     ) {
-      const reason = error.message.split(":", 2)[1] || "verification_failed";
       return Response.json(
         {
           code: "forbidden:chat",
-          message: "Turnstile 验证失败，请重新勾选后再发送。",
-          cause: `turnstile_${reason}`,
+          message: "请求被上游拦截，请确认页面验证已完成后重试。",
+          cause: "cloudflare_preclearance_required",
         },
         { status: 403 }
       );
