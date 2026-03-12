@@ -21,7 +21,7 @@ import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
-import { ChatSDKError } from "@/lib/errors";
+import { ChatSDKError, getClientErrorMessage } from "@/lib/errors";
 import {
   buildRealtimeTokenLogMeta,
   buildRealtimeTokenLogMetaSync,
@@ -1875,21 +1875,13 @@ export function Chat({
       startRealtimeRun(taskMeta, message.id);
     },
     onError: (error) => {
-      if (error instanceof ChatSDKError) {
-        if (
-          error.message?.includes("AI Gateway requires a valid credit card")
-        ) {
-          setShowCreditCardAlert(true);
-        } else {
-          toast({
-            type: "error",
-            description: error.message,
-          });
-        }
+      const message = getClientErrorMessage(error);
+      if (message.includes("AI Gateway requires a valid credit card")) {
+        setShowCreditCardAlert(true);
       } else {
         toast({
           type: "error",
-          description: "Something went wrong. Please try again later.",
+          description: message,
         });
       }
     },
