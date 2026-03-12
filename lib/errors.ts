@@ -75,6 +75,37 @@ export class ChatSDKError extends Error {
   }
 }
 
+export function getClientErrorMessage(error: unknown): string {
+  if (error instanceof ChatSDKError) {
+    return error.message;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    return message || "Something went wrong. Please try again later.";
+  }
+
+  if (typeof error === "string") {
+    const message = error.trim();
+    return message || "Something went wrong. Please try again later.";
+  }
+
+  if (error && typeof error === "object") {
+    const candidate = error as {
+      message?: unknown;
+      cause?: unknown;
+    };
+    if (typeof candidate.message === "string" && candidate.message.trim()) {
+      return candidate.message.trim();
+    }
+    if (typeof candidate.cause === "string" && candidate.cause.trim()) {
+      return candidate.cause.trim();
+    }
+  }
+
+  return "Something went wrong. Please try again later.";
+}
+
 export function getMessageByErrorCode(errorCode: ErrorCode): string {
   if (errorCode.includes("database")) {
     return "An error occurred while executing a database query.";
