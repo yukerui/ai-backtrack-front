@@ -1,10 +1,9 @@
 "use server";
 
-import { generateText, type UIMessage } from "ai";
+import type { UIMessage } from "ai";
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
-import { titlePrompt } from "@/lib/ai/prompts";
-import { getTitleModel } from "@/lib/ai/providers";
+import { generateTitleWithFundSummaryModel } from "@/lib/ai/fund-summary";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
@@ -17,20 +16,12 @@ export async function saveChatModelAsCookie(model: string) {
   cookieStore.set("chat-model", model);
 }
 
-export async function generateTitleFromUserMessage({
+export function generateTitleFromUserMessage({
   message,
 }: {
   message: UIMessage;
 }) {
-  const { text } = await generateText({
-    model: getTitleModel(),
-    system: titlePrompt,
-    prompt: getTextFromMessage(message),
-  });
-  return text
-    .replace(/^[#*"\s]+/, "")
-    .replace(/["]+$/, "")
-    .trim();
+  return generateTitleWithFundSummaryModel(getTextFromMessage(message));
 }
 
 export async function deleteTrailingMessages({ id }: { id: string }) {

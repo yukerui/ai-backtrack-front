@@ -123,17 +123,5 @@ export const updateDocumentPrompt = (
 ${currentContent}`;
 };
 
-export const titlePrompt = `Generate a short chat title (2-5 words) summarizing the user's message.
-
-Output ONLY the title text. No prefixes, no formatting.
-
-Examples:
-- "what's the weather in nyc" → Weather in NYC
-- "help me write an essay about space" → Space Essay Help
-- "hi" → New Conversation
-- "debug my python code" → Python Debugging
-
-Bad outputs (never do this):
-- "# Space Essay" (no hashtags)
-- "Title: Weather" (no prefixes)
-- ""NYC Weather"" (no quotes)`;
+export const titlePrompt =
+  "你是会话标题生成器。请根据用户的第一条消息，生成一个适合显示在历史列表里的简短标题。";
