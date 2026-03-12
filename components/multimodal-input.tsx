@@ -77,8 +77,6 @@ function PureMultimodalInput({
   sendMessage,
   className,
   selectedVisibilityType,
-  turnstileRequired = false,
-  turnstileVerified = true,
 }: {
   chatId: string;
   input: string;
@@ -92,8 +90,6 @@ function PureMultimodalInput({
   sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
   className?: string;
   selectedVisibilityType: VisibilityType;
-  turnstileRequired?: boolean;
-  turnstileVerified?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -169,30 +165,31 @@ function PureMultimodalInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
-  const turnstileReady = !turnstileRequired || Boolean(turnstileVerified);
-
   const submitForm = useCallback(() => {
     window.history.pushState({}, "", `/chat/${chatId}`);
 
-    sendMessage({
-      role: "user",
-      parts: [
-        ...attachments.map((attachment) => ({
-          type: "file" as const,
-          url: attachment.url,
-          name: attachment.name,
-          mediaType: attachment.contentType,
-        })),
-        {
-          type: "text",
-          text: input,
-        },
-      ],
-    }, {
-      body: {
-        selectedChatModel: normalizedChatModel,
+    sendMessage(
+      {
+        role: "user",
+        parts: [
+          ...attachments.map((attachment) => ({
+            type: "file" as const,
+            url: attachment.url,
+            name: attachment.name,
+            mediaType: attachment.contentType,
+          })),
+          {
+            type: "text",
+            text: input,
+          },
+        ],
       },
-    });
+      {
+        body: {
+          selectedChatModel: normalizedChatModel,
+        },
+      }
+    );
 
     setAttachments([]);
     setLocalStorageInput("");
@@ -333,9 +330,7 @@ function PureMultimodalInput({
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
           <SuggestedActions
-            canSend={turnstileReady}
             chatId={chatId}
-            onRequireVerification={() => toast.error("请先完成页面验证")}
             selectedVisibilityType={selectedVisibilityType}
             sendMessage={sendMessage}
           />
@@ -356,10 +351,6 @@ function PureMultimodalInput({
         onSubmit={(event) => {
           event.preventDefault();
           if (!input.trim() && attachments.length === 0) {
-            return;
-          }
-          if (!turnstileReady) {
-            toast.error("请先完成页面验证");
             return;
           }
           if (status !== "ready") {
@@ -434,11 +425,7 @@ function PureMultimodalInput({
             <PromptInputSubmit
               className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
               data-testid="send-button"
-              disabled={
-                !input.trim() ||
-                uploadQueue.length > 0 ||
-                !turnstileReady
-              }
+              disabled={!input.trim() || uploadQueue.length > 0}
               status={status}
             >
               <ArrowUpIcon size={14} />
@@ -463,12 +450,6 @@ export const MultimodalInput = memo(
       return false;
     }
     if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
-      return false;
-    }
-    if (prevProps.turnstileRequired !== nextProps.turnstileRequired) {
-      return false;
-    }
-    if (prevProps.turnstileVerified !== nextProps.turnstileVerified) {
       return false;
     }
 
@@ -525,7 +506,9 @@ function PureModelSelectorCompact({
           variant="ghost"
         >
           <ModelSelectorLogo provider={selectedProvider} />
-          <ModelSelectorName>{selectedModel?.name || "Model"}</ModelSelectorName>
+          <ModelSelectorName>
+            {selectedModel?.name || "Model"}
+          </ModelSelectorName>
         </Button>
       </ModelSelectorTrigger>
       <ModelSelectorContent>
@@ -546,7 +529,9 @@ function PureModelSelectorCompact({
 
                 return (
                   <ModelSelectorItem
-                    className={isDisabled ? "cursor-not-allowed opacity-60" : undefined}
+                    className={
+                      isDisabled ? "cursor-not-allowed opacity-60" : undefined
+                    }
                     disabled={isDisabled}
                     key={model.id}
                     onSelect={() => {

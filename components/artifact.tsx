@@ -68,8 +68,6 @@ function PureArtifact({
   votes,
   isReadonly,
   selectedVisibilityType,
-  turnstileRequired = false,
-  turnstileVerified = true,
 }: {
   addToolApprovalResponse: UseChatHelpers<ChatMessage>["addToolApprovalResponse"];
   chatId: string;
@@ -86,8 +84,6 @@ function PureArtifact({
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   isReadonly: boolean;
   selectedVisibilityType: VisibilityType;
-  turnstileRequired?: boolean;
-  turnstileVerified?: boolean;
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
 
@@ -349,8 +345,6 @@ function PureArtifact({
                     setMessages={setMessages}
                     status={status}
                     stop={stop}
-                    turnstileRequired={turnstileRequired}
-                    turnstileVerified={turnstileVerified}
                   />
                 </div>
               </div>
@@ -528,12 +522,6 @@ export const Artifact = memo(PureArtifact, (prevProps, nextProps) => {
     return false;
   }
   if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
-    return false;
-  }
-  if (prevProps.turnstileRequired !== nextProps.turnstileRequired) {
-    return false;
-  }
-  if (prevProps.turnstileVerified !== nextProps.turnstileVerified) {
     return false;
   }
 
