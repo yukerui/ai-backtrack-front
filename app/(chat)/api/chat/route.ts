@@ -1411,8 +1411,8 @@ export async function POST(request: Request) {
         if (titlePromise) {
           const title = await titlePromise;
           if (title) {
+            await updateChatTitleById({ chatId: id, title });
             dataStream.write({ type: "data-chat-title", data: title });
-            updateChatTitleById({ chatId: id, title });
           }
         }
       },

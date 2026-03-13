@@ -44,6 +44,7 @@ export type ChatHistory = {
 };
 
 const PAGE_SIZE = 20;
+const CHAT_HISTORY_KEY_PREFIX = "/api/history?history_user=";
 
 const groupChatsByDate = (chats: Chat[]): GroupedChats => {
   const now = new Date();
@@ -102,6 +103,10 @@ export function getChatHistoryPaginationKey(
   }
 
   return `/api/history?history_user=${userId}&ending_before=${firstChatFromPage.id}&limit=${PAGE_SIZE}`;
+}
+
+export function isChatHistoryCacheKey(key: unknown) {
+  return typeof key === "string" && key.startsWith(CHAT_HISTORY_KEY_PREFIX);
 }
 
 export function SidebarHistory({ user }: { user: User | undefined }) {
