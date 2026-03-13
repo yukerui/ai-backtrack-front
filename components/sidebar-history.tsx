@@ -124,7 +124,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     : false;
 
   const historyState = getChatHistoryState({
-    userEmail: user.email,
+    userEmail: user?.email,
     isLoading,
     hasError: Boolean(error),
     pages: paginatedChatHistories,
