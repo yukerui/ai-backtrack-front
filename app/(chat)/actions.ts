@@ -16,12 +16,12 @@ export async function saveChatModelAsCookie(model: string) {
   cookieStore.set("chat-model", model);
 }
 
-export function generateTitleFromUserMessage({
+export async function generateTitleFromUserMessage({
   message,
 }: {
   message: UIMessage;
 }) {
-  return generateTitleWithFundSummaryModel(getTextFromMessage(message));
+  return await generateTitleWithFundSummaryModel(getTextFromMessage(message));
 }
 
 export async function deleteTrailingMessages({ id }: { id: string }) {
