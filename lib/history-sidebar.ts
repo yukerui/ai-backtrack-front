@@ -1,11 +1,11 @@
-const GUEST_EMAIL_REGEX = /^guest-\d+$/;
-
 type ChatHistoryLike = {
   chats: unknown[];
 };
 
+export type ChatHistoryUserType = "guest" | "regular";
+
 type ChatHistoryStateInput = {
-  userEmail?: string | null;
+  userType?: ChatHistoryUserType | null;
   isLoading: boolean;
   hasError: boolean;
   pages?: ChatHistoryLike[];
@@ -18,8 +18,8 @@ export type ChatHistoryState =
   | "guest-empty"
   | "ready";
 
-export function isGuestUserEmail(email?: string | null) {
-  return GUEST_EMAIL_REGEX.test(email ?? "");
+export function isGuestUserType(userType?: ChatHistoryUserType | null) {
+  return userType === "guest";
 }
 
 export function hasEmptyChatHistory(pages?: ChatHistoryLike[]) {
@@ -33,7 +33,7 @@ export function hasEmptyChatHistory(pages?: ChatHistoryLike[]) {
 }
 
 export function getChatHistoryState({
-  userEmail,
+  userType,
   isLoading,
   hasError,
   pages,
@@ -47,7 +47,7 @@ export function getChatHistoryState({
   }
 
   if (hasEmptyChatHistory(pages)) {
-    return isGuestUserEmail(userEmail) ? "guest-empty" : "empty";
+    return isGuestUserType(userType) ? "guest-empty" : "empty";
   }
 
   return "ready";

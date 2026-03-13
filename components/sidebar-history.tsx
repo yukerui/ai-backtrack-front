@@ -80,14 +80,19 @@ const groupChatsByDate = (chats: Chat[]): GroupedChats => {
 
 export function getChatHistoryPaginationKey(
   pageIndex: number,
-  previousPageData: ChatHistory
+  previousPageData: ChatHistory,
+  userId?: string
 ) {
+  if (!userId) {
+    return null;
+  }
+
   if (previousPageData && previousPageData.hasMore === false) {
     return null;
   }
 
   if (pageIndex === 0) {
-    return `/api/history?limit=${PAGE_SIZE}`;
+    return `/api/history?history_user=${userId}&limit=${PAGE_SIZE}`;
   }
 
   const firstChatFromPage = previousPageData.chats.at(-1);
@@ -96,13 +101,14 @@ export function getChatHistoryPaginationKey(
     return null;
   }
 
-  return `/api/history?ending_before=${firstChatFromPage.id}&limit=${PAGE_SIZE}`;
+  return `/api/history?history_user=${userId}&ending_before=${firstChatFromPage.id}&limit=${PAGE_SIZE}`;
 }
 
 export function SidebarHistory({ user }: { user: User | undefined }) {
   const { setOpenMobile } = useSidebar();
   const pathname = usePathname();
   const id = pathname?.startsWith("/chat/") ? pathname.split("/")[2] : null;
+  const userId = user?.id;
 
   const {
     data: paginatedChatHistories,
@@ -111,9 +117,11 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     isLoading,
     mutate,
     error,
-  } = useSWRInfinite<ChatHistory>(getChatHistoryPaginationKey, fetcher, {
-    fallbackData: [],
-  });
+  } = useSWRInfinite<ChatHistory>(
+    (pageIndex, previousPageData) =>
+      getChatHistoryPaginationKey(pageIndex, previousPageData, userId),
+    fetcher
+  );
 
   const router = useRouter();
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -124,7 +132,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     : false;
 
   const historyState = getChatHistoryState({
-    userEmail: user?.email,
+    userType: user?.type,
     isLoading,
     hasError: Boolean(error),
     pages: paginatedChatHistories,

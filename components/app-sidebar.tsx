@@ -48,7 +48,11 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     toast.promise(deletePromise, {
       loading: "Deleting all chats...",
       success: () => {
-        mutate(unstable_serialize(getChatHistoryPaginationKey));
+        mutate(
+          unstable_serialize((pageIndex, previousPageData) =>
+            getChatHistoryPaginationKey(pageIndex, previousPageData, user?.id)
+          )
+        );
         setShowDeleteAllDialog(false);
         router.replace("/");
         router.refresh();

@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   getChatHistoryState,
   hasEmptyChatHistory,
-  isGuestUserEmail,
+  isGuestUserType,
 } from "../../lib/history-sidebar";
 
 test("hasEmptyChatHistory requires at least one page", () => {
@@ -14,7 +14,7 @@ test("hasEmptyChatHistory requires at least one page", () => {
 test("getChatHistoryState keeps fetch errors out of the empty state", () => {
   assert.equal(
     getChatHistoryState({
-      userEmail: "guest-1",
+      userType: "guest",
       isLoading: false,
       hasError: true,
       pages: [],
@@ -26,20 +26,20 @@ test("getChatHistoryState keeps fetch errors out of the empty state", () => {
 test("getChatHistoryState returns guest-empty for guest sessions", () => {
   assert.equal(
     getChatHistoryState({
-      userEmail: "guest-1",
+      userType: "guest",
       isLoading: false,
       hasError: false,
       pages: [{ chats: [] }],
     }),
     "guest-empty"
   );
-  assert.equal(isGuestUserEmail("guest-1"), true);
+  assert.equal(isGuestUserType("guest"), true);
 });
 
 test("getChatHistoryState returns empty for regular users", () => {
   assert.equal(
     getChatHistoryState({
-      userEmail: "user@example.com",
+      userType: "regular",
       isLoading: false,
       hasError: false,
       pages: [{ chats: [] }],
@@ -51,11 +51,22 @@ test("getChatHistoryState returns empty for regular users", () => {
 test("getChatHistoryState returns ready when there is chat data", () => {
   assert.equal(
     getChatHistoryState({
-      userEmail: "user@example.com",
+      userType: "regular",
       isLoading: false,
       hasError: false,
       pages: [{ chats: [{ id: "1" }] }],
     }),
     "ready"
+  );
+});
+
+test("getChatHistoryState treats missing user type as a regular empty state", () => {
+  assert.equal(
+    getChatHistoryState({
+      isLoading: false,
+      hasError: false,
+      pages: [{ chats: [] }],
+    }),
+    "empty"
   );
 });

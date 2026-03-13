@@ -3,7 +3,7 @@
 import type { UIMessage } from "ai";
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
-import { generateTitleWithFundSummaryModel } from "@/lib/ai/fund-summary";
+import { getChatTitleFromUserText } from "@/lib/chat-title";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
@@ -21,7 +21,9 @@ export async function generateTitleFromUserMessage({
 }: {
   message: UIMessage;
 }) {
-  return await generateTitleWithFundSummaryModel(getTextFromMessage(message));
+  return await Promise.resolve(
+    getChatTitleFromUserText(getTextFromMessage(message))
+  );
 }
 
 export async function deleteTrailingMessages({ id }: { id: string }) {
