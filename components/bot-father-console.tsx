@@ -568,17 +568,6 @@ export function BotFatherConsole({
               placeholder="ou_xxx"
               value={createForm.ownerOpenId}
             />
-            <p className="text-muted-foreground text-xs">
-              不知道怎么获取可查看{" "}
-              <a
-                className="underline underline-offset-4"
-                href="https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid"
-                rel="noreferrer"
-                target="_blank"
-              >
-                飞书 OpenID 获取说明
-              </a>
-            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor={inSheet ? "sheet-appId" : "appId"}>App ID</Label>
@@ -748,8 +737,8 @@ export function BotFatherConsole({
           <h1 className="font-semibold text-2xl tracking-tight">Channels</h1>
           <p className="max-w-3xl text-muted-foreground text-sm">
             {isAdmin
-              ? `已登录管理员：${currentUserEmail}。把“首次接入”和“日常管理”拆开处理，减少操作判断和页面拥挤。`
-              : `当前登录账号：${currentUserEmail}。先完成接入，再到管理视图里统一查看状态、编辑、启停和排障。`}
+              ? `已登录管理员：${currentUserEmail}`
+              : `当前登录账号：${currentUserEmail}`}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -801,7 +790,7 @@ export function BotFatherConsole({
               <CardHeader>
                 <CardTitle>4 步完成接入</CardTitle>
                 <CardDescription>
-                  新手只需要按顺序准备飞书应用，再在右侧提交表单，不用在说明和管理区之间来回切换。
+                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -871,10 +860,10 @@ export function BotFatherConsole({
                       </CollapsibleContent>
                     </Collapsible>
                     <div className="rounded-xl border bg-muted/30 p-3 text-muted-foreground text-xs">
-                      <p>1. 在“添加应用能力”里启用 Bot。</p>
-                      <p>2. 在“事件与回调”里选择长连接。</p>
-                      <p>3. 添加事件 `im.message.receive_v1`。</p>
-                      <p>4. 最后在“版本管理与发布”里创建版本并发布。</p>
+                      <p>5. 在“添加应用能力”里启用 Bot。</p>
+                      <p>6. 在“事件与回调”里选择长连接。</p>
+                      <p>7. 添加事件 `im.message.receive_v1`。</p>
+                      <p>8. 最后在“版本管理与发布”里创建版本并发布。</p>
                     </div>
                   </div>
                 </StepCard>
@@ -886,7 +875,7 @@ export function BotFatherConsole({
             <CardHeader>
               <CardTitle>接入新 Channel</CardTitle>
               <CardDescription>
-                这里只保留最少必填字段。默认会在创建后立即启动，完成后自动切到管理视图。
+                填写必要信息后即可创建；默认会在创建后立即启动。
               </CardDescription>
             </CardHeader>
             <CardContent>{renderChannelForm()}</CardContent>
