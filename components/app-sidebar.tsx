@@ -7,7 +7,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
-import { BotIcon, PlusIcon, TrashIcon } from "@/components/icons";
+import { HomeIcon, RouteIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import {
   getChatHistoryPaginationKey,
   SidebarHistory,
@@ -129,32 +129,49 @@ export function AppSidebar({
           </SidebarMenu>
         </SidebarHeader>
         <SidebarContent>
-          {showBotFather ? (
-            <SidebarGroup>
-              <SidebarGroupLabel>管理</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
+          <SidebarGroup>
+            <SidebarGroupLabel>菜单</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === "/"}
+                    tooltip="Chat"
+                  >
+                    <Link
+                      href="/"
+                      onClick={() => {
+                        setOpenMobile(false);
+                      }}
+                    >
+                      <HomeIcon size={16} />
+                      <span>Chat</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {showBotFather ? (
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       asChild
-                      isActive={pathname === "/bot-father"}
-                      tooltip="Bot Father"
+                      isActive={pathname === "/channels"}
+                      tooltip="Channels"
                     >
                       <Link
-                        href="/bot-father"
+                        href="/channels"
                         onClick={() => {
                           setOpenMobile(false);
                         }}
                       >
-                        <BotIcon />
-                        <span>Bot Father</span>
+                        <RouteIcon size={16} />
+                        <span>Channels</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ) : null}
+                ) : null}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
           <SidebarHistory user={user} />
         </SidebarContent>
         <SidebarFooter>{user && <SidebarUserNav user={user} />}</SidebarFooter>
