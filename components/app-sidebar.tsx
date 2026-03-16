@@ -10,21 +10,18 @@ import { unstable_serialize } from "swr/infinite";
 import {
   ChevronDownIcon,
   HomeIcon,
-  RouteIcon,
   PlusIcon,
+  RouteIcon,
   TrashIcon,
 } from "@/components/icons";
-import {
-  getChatHistoryPaginationKey,
-  SidebarHistory,
-} from "@/components/sidebar-history";
+import { getChatHistoryPaginationKey } from "@/components/sidebar-history";
 import { SidebarUserNav } from "@/components/sidebar-user-nav";
+import { Button } from "@/components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
@@ -36,6 +33,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar";
 import {
@@ -62,15 +62,15 @@ export function AppSidebar({
   const { setOpenMobile } = useSidebar();
   const { mutate } = useSWRConfig();
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
-  const [chatMenuOpen, setChatMenuOpen] = useState(() =>
-    pathname === "/" || pathname?.startsWith("/chat/")
-  );
+  const isChatRoute = pathname === "/" || pathname?.startsWith("/chat/");
+  const isHistoryRoute = pathname === "/chat/history";
+  const [isChatMenuOpen, setIsChatMenuOpen] = useState(isHistoryRoute);
 
   useEffect(() => {
-    if (pathname === "/" || pathname?.startsWith("/chat/")) {
-      setChatMenuOpen(true);
+    if (isHistoryRoute) {
+      setIsChatMenuOpen(true);
     }
-  }, [pathname]);
+  }, [isHistoryRoute]);
 
   const handleDeleteAll = () => {
     const deletePromise = fetch("/api/history", {
@@ -131,7 +131,7 @@ export function AppSidebar({
                       className="h-8 p-1 md:h-fit md:p-2"
                       onClick={() => {
                         setOpenMobile(false);
-                        router.push("/");
+                        router.push("/chat/new");
                         router.refresh();
                       }}
                       type="button"
@@ -155,34 +155,58 @@ export function AppSidebar({
               <SidebarMenu>
                 <SidebarMenuItem>
                   <Collapsible
-                    onOpenChange={setChatMenuOpen}
-                    open={chatMenuOpen}
+                    className="group/collapsible"
+                    onOpenChange={setIsChatMenuOpen}
+                    open={isChatMenuOpen}
                   >
                     <CollapsibleTrigger asChild>
-                      <SidebarMenuButton
-                        isActive={pathname === "/" || pathname?.startsWith("/chat/")}
-                        onClick={() => {
-                          if (pathname !== "/") {
-                            router.push("/");
-                            router.refresh();
-                          }
-                          setOpenMobile(false);
-                        }}
-                        tooltip="Chat"
-                      >
+                      <SidebarMenuButton isActive={isChatRoute} tooltip="Chat">
                         <HomeIcon size={16} />
                         <span>Chat</span>
-                        <span
+                        <ChevronDownIcon
                           className={`ml-auto transition-transform ${
-                            chatMenuOpen ? "rotate-180" : ""
+                            isChatMenuOpen ? "rotate-180" : ""
                           }`}
-                        >
-                          <ChevronDownIcon size={16} />
-                        </span>
+                          size={14}
+                        />
                       </SidebarMenuButton>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <SidebarHistory user={user} />
+                      <SidebarMenuSub>
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={
+                              pathname === "/" || pathname === "/chat/new"
+                            }
+                          >
+                            <Link
+                              href="/chat/new"
+                              onClick={() => {
+                                setOpenMobile(false);
+                              }}
+                            >
+                              <PlusIcon size={14} />
+                              <span>New chat</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={isHistoryRoute}
+                          >
+                            <Link
+                              href="/chat/history"
+                              onClick={() => {
+                                setOpenMobile(false);
+                              }}
+                            >
+                              <span>Chat history</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      </SidebarMenuSub>
                     </CollapsibleContent>
                   </Collapsible>
                 </SidebarMenuItem>
