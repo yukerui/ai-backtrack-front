@@ -3,27 +3,18 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import {
-  ChevronDownIcon,
   HomeIcon,
   RouteIcon,
   PlusIcon,
   TrashIcon,
 } from "@/components/icons";
-import {
-  getChatHistoryPaginationKey,
-  SidebarHistory,
-} from "@/components/sidebar-history";
+import { getChatHistoryPaginationKey } from "@/components/sidebar-history";
 import { SidebarUserNav } from "@/components/sidebar-user-nav";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -62,15 +53,6 @@ export function AppSidebar({
   const { setOpenMobile } = useSidebar();
   const { mutate } = useSWRConfig();
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
-  const [chatMenuOpen, setChatMenuOpen] = useState(() =>
-    pathname === "/" || pathname?.startsWith("/chat/")
-  );
-
-  useEffect(() => {
-    if (pathname === "/" || pathname?.startsWith("/chat/")) {
-      setChatMenuOpen(true);
-    }
-  }, [pathname]);
 
   const handleDeleteAll = () => {
     const deletePromise = fetch("/api/history", {
@@ -80,11 +62,7 @@ export function AppSidebar({
     toast.promise(deletePromise, {
       loading: "Deleting all chats...",
       success: () => {
-        mutate(
-          unstable_serialize((pageIndex, previousPageData) =>
-            getChatHistoryPaginationKey(pageIndex, previousPageData, user?.id)
-          )
-        );
+        mutate(unstable_serialize(getChatHistoryPaginationKey));
         setShowDeleteAllDialog(false);
         router.replace("/");
         router.refresh();
@@ -135,7 +113,7 @@ export function AppSidebar({
                       className="h-8 p-1 md:h-fit md:p-2"
                       onClick={() => {
                         setOpenMobile(false);
-                        router.push("/");
+                        router.push("/chat/new");
                         router.refresh();
                       }}
                       type="button"
@@ -158,37 +136,21 @@ export function AppSidebar({
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <Collapsible
-                    onOpenChange={setChatMenuOpen}
-                    open={chatMenuOpen}
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === "/" || pathname?.startsWith("/chat/")}
+                    tooltip="Chat"
                   >
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuButton
-                        isActive={pathname === "/" || pathname?.startsWith("/chat/")}
-                        onClick={() => {
-                          if (pathname !== "/") {
-                            router.push("/");
-                            router.refresh();
-                          }
-                          setOpenMobile(false);
-                        }}
-                        tooltip="Chat"
-                      >
-                        <HomeIcon size={16} />
-                        <span>Chat</span>
-                        <span
-                          className={`ml-auto transition-transform ${
-                            chatMenuOpen ? "rotate-180" : ""
-                          }`}
-                        >
-                          <ChevronDownIcon size={16} />
-                        </span>
-                      </SidebarMenuButton>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarHistory user={user} />
-                    </CollapsibleContent>
-                  </Collapsible>
+                    <Link
+                      href="/"
+                      onClick={() => {
+                        setOpenMobile(false);
+                      }}
+                    >
+                      <HomeIcon size={16} />
+                      <span>Chat</span>
+                    </Link>
+                  </SidebarMenuButton>
                 </SidebarMenuItem>
                 {showBotFather ? (
                   <SidebarMenuItem>

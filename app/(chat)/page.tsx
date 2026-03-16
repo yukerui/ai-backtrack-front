@@ -1,34 +1,8 @@
-import { Suspense } from "react";
-import { connection } from "next/server";
-import { Chat } from "@/components/chat";
-import { DataStreamHandler } from "@/components/data-stream-handler";
-import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
-import { generateUUID } from "@/lib/utils";
+import { auth } from "@/app/(auth)/auth";
+import { ChatHistoryPage } from "@/components/chat-history-page";
 
-export default function Page() {
-  return (
-    <Suspense fallback={<div className="flex h-dvh" />}>
-      <NewChatPage />
-    </Suspense>
-  );
-}
+export default async function Page() {
+  const session = await auth();
 
-async function NewChatPage() {
-  await connection();
-  const id = generateUUID();
-
-  return (
-    <>
-      <Chat
-        autoResume={false}
-        id={id}
-        initialChatModel={DEFAULT_CHAT_MODEL}
-        initialMessages={[]}
-        initialVisibilityType="private"
-        isReadonly={false}
-        key={id}
-      />
-      <DataStreamHandler />
-    </>
-  );
+  return <ChatHistoryPage user={session?.user} />;
 }
