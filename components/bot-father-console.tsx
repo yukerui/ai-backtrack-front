@@ -124,6 +124,8 @@ const FEISHU_PERMISSION_IMPORT_JSON = `{
   "scopes": {
     "tenant": [
       "im:message",
+      "im:message.group_at_msg:readonly",
+      "im:message.p2p_msg:readonly",
       "im:message.reactions:write_only"
     ],
     "user": []
@@ -437,6 +439,32 @@ export function BotFatherConsole({
                   </a>{" "}
                   查看
                 </li>
+                <li>
+                  <div className="space-y-2">
+                    <p className="text-foreground">配置应用权限</p>
+                    <div className="rounded-lg border bg-muted/30 p-3">
+                      <div className="space-y-1">
+                        <p className="font-medium text-foreground">权限配置</p>
+                        <p className="text-muted-foreground">
+                          在飞书开放平台进入“权限管理 -&gt; 批量导入/导出权限
+                          -&gt; 导入权限”，复制以下内容导入。
+                        </p>
+                      </div>
+                      <Collapsible className="mt-3" defaultOpen={false}>
+                        <CollapsibleTrigger asChild>
+                          <Button size="sm" type="button" variant="outline">
+                            查看权限导入 JSON
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <pre className="mt-3 overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs text-foreground">
+                            {FEISHU_PERMISSION_IMPORT_JSON}
+                          </pre>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </div>
+                  </div>
+                </li>
                 <li>在“添加应用能力”里启用 Bot</li>
                 <li>
                   在“事件与回调”里选择长连接，并添加 im.message.receive_v1
@@ -446,27 +474,6 @@ export function BotFatherConsole({
                   <li>通过这个页面创建的 bot 会自动归属到当前网站账号</li>
                 )}
               </ol>
-              <div className="rounded-lg border bg-muted/30 p-3">
-                <div className="space-y-1">
-                  <p className="font-medium text-foreground">权限配置</p>
-                  <p className="text-muted-foreground">
-                    在飞书开放平台进入“权限管理 -&gt; 批量导入/导出权限 -&gt;
-                    导入权限”，复制以下内容导入。
-                  </p>
-                </div>
-                <Collapsible className="mt-3" defaultOpen={false}>
-                  <CollapsibleTrigger asChild>
-                    <Button size="sm" type="button" variant="outline">
-                      查看权限导入 JSON
-                    </Button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <pre className="mt-3 overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs text-foreground">
-                      {FEISHU_PERMISSION_IMPORT_JSON}
-                    </pre>
-                  </CollapsibleContent>
-                </Collapsible>
-              </div>
             </CardContent>
           </Card>
 
