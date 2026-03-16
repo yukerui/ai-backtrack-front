@@ -130,7 +130,7 @@ export function AppSidebar({
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>菜单</SidebarGroupLabel>
+            <SidebarGroupLabel>Chat</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
@@ -150,7 +150,15 @@ export function AppSidebar({
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                {showBotFather ? (
+              </SidebarMenu>
+              <SidebarHistory user={user} />
+            </SidebarGroupContent>
+          </SidebarGroup>
+          {showBotFather ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>Channels</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       asChild
@@ -168,11 +176,10 @@ export function AppSidebar({
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                ) : null}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-          <SidebarHistory user={user} />
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
         </SidebarContent>
         <SidebarFooter>{user && <SidebarUserNav user={user} />}</SidebarFooter>
       </Sidebar>
