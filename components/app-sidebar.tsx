@@ -3,16 +3,27 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
-import { HomeIcon, RouteIcon, PlusIcon, TrashIcon } from "@/components/icons";
+import {
+  ChevronDownIcon,
+  HomeIcon,
+  RouteIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@/components/icons";
 import {
   getChatHistoryPaginationKey,
   SidebarHistory,
 } from "@/components/sidebar-history";
 import { SidebarUserNav } from "@/components/sidebar-user-nav";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -51,6 +62,15 @@ export function AppSidebar({
   const { setOpenMobile } = useSidebar();
   const { mutate } = useSWRConfig();
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(() =>
+    pathname === "/" || pathname?.startsWith("/chat/")
+  );
+
+  useEffect(() => {
+    if (pathname === "/" || pathname?.startsWith("/chat/")) {
+      setChatMenuOpen(true);
+    }
+  }, [pathname]);
 
   const handleDeleteAll = () => {
     const deletePromise = fetch("/api/history", {
@@ -130,35 +150,43 @@ export function AppSidebar({
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>Chat</SidebarGroupLabel>
+            <SidebarGroupLabel>菜单</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === "/"}
-                    tooltip="Chat"
+                  <Collapsible
+                    onOpenChange={setChatMenuOpen}
+                    open={chatMenuOpen}
                   >
-                    <Link
-                      href="/"
-                      onClick={() => {
-                        setOpenMobile(false);
-                      }}
-                    >
-                      <HomeIcon size={16} />
-                      <span>Chat</span>
-                    </Link>
-                  </SidebarMenuButton>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton
+                        isActive={pathname === "/" || pathname?.startsWith("/chat/")}
+                        onClick={() => {
+                          if (pathname !== "/") {
+                            router.push("/");
+                            router.refresh();
+                          }
+                          setOpenMobile(false);
+                        }}
+                        tooltip="Chat"
+                      >
+                        <HomeIcon size={16} />
+                        <span>Chat</span>
+                        <span
+                          className={`ml-auto transition-transform ${
+                            chatMenuOpen ? "rotate-180" : ""
+                          }`}
+                        >
+                          <ChevronDownIcon size={16} />
+                        </span>
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarHistory user={user} />
+                    </CollapsibleContent>
+                  </Collapsible>
                 </SidebarMenuItem>
-              </SidebarMenu>
-              <SidebarHistory user={user} />
-            </SidebarGroupContent>
-          </SidebarGroup>
-          {showBotFather ? (
-            <SidebarGroup>
-              <SidebarGroupLabel>Channels</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
+                {showBotFather ? (
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       asChild
@@ -176,10 +204,10 @@ export function AppSidebar({
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ) : null}
+                ) : null}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>{user && <SidebarUserNav user={user} />}</SidebarFooter>
       </Sidebar>
