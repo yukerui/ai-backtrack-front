@@ -76,21 +76,6 @@ export async function POST(request: Request) {
       const canUpdateExisting =
         botSlug.length > 0 && access.accessibleBotSlugs.includes(botSlug);
       normalizedBody.force = canUpdateExisting;
-      if (canUpdateExisting) {
-        const detailResponse = await fetchBotFatherBackend(
-          `/v1/bot-father/bots/${encodeURIComponent(botSlug)}`
-        );
-        const detail = await toBotFatherJsonResponse(detailResponse);
-        if (detail instanceof Response) {
-          return detail;
-        }
-        const existingOwnerOpenId = String(
-          detail.payload?.bot?.owner_open_id || ""
-        ).trim();
-        if (existingOwnerOpenId) {
-          normalizedBody.ownerOpenId = existingOwnerOpenId;
-        }
-      }
     }
     const response = await fetchBotFatherBackend("/v1/bot-father/bots", {
       method: "POST",

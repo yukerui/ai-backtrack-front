@@ -32,7 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { getClientErrorMessage } from "@/lib/errors";
-import { fetcher } from "@/lib/utils";
+import { cn, fetcher } from "@/lib/utils";
 
 type BotSummary = {
   bot_slug: string;
@@ -235,6 +235,7 @@ export function BotFatherConsole({
   } = useSWR<DetailResponse>(detailKey, fetcher);
 
   const selectedBot = detailData?.bot || null;
+  const selectedBotRunning = selectedBot?.state === "running";
 
   async function refreshCurrentBot() {
     await Promise.all([mutateBots(), mutateDetail()]);
@@ -242,6 +243,14 @@ export function BotFatherConsole({
 
   async function handleCreateBot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (
+      editingBotSlug &&
+      selectedBot?.bot_slug === editingBotSlug &&
+      selectedBot.state === "running"
+    ) {
+      toast.error("请先停止运行后再编辑");
+      return;
+    }
     const editingSlug = editingBotSlug;
     setBusyAction("create");
     try {
@@ -345,6 +354,14 @@ export function BotFatherConsole({
         block: "start",
       });
     });
+  }
+
+  function handleEditRequest() {
+    if (selectedBotRunning) {
+      toast.error("请先停止运行后再编辑");
+      return;
+    }
+    handleEditBot();
   }
 
   async function handleDeleteBot() {
@@ -563,25 +580,22 @@ export function BotFatherConsole({
                         }))
                       }
                       placeholder="ou_xxx"
-                      readOnly={Boolean(editingBotSlug)}
                       value={createForm.ownerOpenId}
                     />
                     <p className="text-muted-foreground text-xs">
-                      {editingBotSlug ? (
-                        "编辑已有 channel 时不支持在这里迁移 owner。"
-                      ) : (
-                        <>
-                          不知道怎么获取可查看{" "}
-                          <a
-                            className="underline underline-offset-4"
-                            href="https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid"
-                            rel="noreferrer"
-                            target="_blank"
-                          >
-                            飞书 OpenID 获取说明
-                          </a>
-                        </>
-                      )}
+                      {editingBotSlug
+                        ? "编辑时可直接修改 owner open id。"
+                        : null}
+                      {editingBotSlug ? " " : null}
+                      不知道怎么获取可查看{" "}
+                      <a
+                        className="underline underline-offset-4"
+                        href="https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid"
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        飞书 OpenID 获取说明
+                      </a>
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -780,8 +794,7 @@ export function BotFatherConsole({
             <CardHeader>
               <CardTitle>Channel 详情与操作</CardTitle>
               <CardDescription>
-                选中一个 channel
-                后，可直接查看详情、编辑、启停、诊断、日志、重建和删除。
+                选中一个 channel 后，可按配置、运行、诊断和危险操作分组管理。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -800,182 +813,279 @@ export function BotFatherConsole({
               ) : null}
               {selectedBot ? (
                 <>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-1">
+                  <div className="rounded-2xl border bg-gradient-to-br from-muted/40 via-background to-background p-5">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="font-semibold text-xl">
+                            {selectedBot.display_name || selectedBot.bot_slug}
+                          </div>
+                          <Badge variant={stateVariant(selectedBot.state)}>
+                            {selectedBot.state}
+                          </Badge>
+                          {selectedBotRunning ? (
+                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-700 text-xs">
+                              运行中暂不可编辑
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground text-sm">
+                          <span className="font-mono">
+                            {selectedBot.bot_slug}
+                          </span>
+                          <span>Owner: {selectedBot.owner_open_id}</span>
+                          <span>App ID: {selectedBot.app_id}</span>
+                        </div>
+                        {selectedBot.last_error ? (
+                          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-destructive text-sm">
+                            最近错误：{selectedBot.last_error}
+                          </div>
+                        ) : (
+                          <div className="text-muted-foreground text-sm">
+                            当前 channel
+                            已就绪，可在下方按分组执行配置、运行和诊断操作。
+                          </div>
+                        )}
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-xl border bg-background/80 p-3">
+                          <div className="text-muted-foreground text-xs">
+                            更新时间
+                          </div>
+                          <div className="mt-1 font-medium text-sm">
+                            {formatTimestamp(selectedBot.updated_at)}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border bg-background/80 p-3">
+                          <div className="text-muted-foreground text-xs">
+                            最近启动
+                          </div>
+                          <div className="mt-1 font-medium text-sm">
+                            {formatTimestamp(selectedBot.last_started_at)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">
                         自定义标识
                       </div>
-                      <div className="break-all font-medium">
+                      <div className="mt-1 break-all font-medium">
                         {selectedBot.bot_slug}
                       </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">
                         显示名称
                       </div>
-                      <div>{selectedBot.display_name || "-"}</div>
+                      <div className="mt-1 font-medium">
+                        {selectedBot.display_name || "-"}
+                      </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">
                         Owner Open ID
                       </div>
-                      <div className="break-all">
+                      <div className="mt-1 break-all font-medium text-sm">
                         {selectedBot.owner_open_id}
                       </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">
                         App ID
                       </div>
-                      <div className="break-all">{selectedBot.app_id}</div>
+                      <div className="mt-1 break-all font-medium text-sm">
+                        {selectedBot.app_id}
+                      </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">密钥</div>
-                      <div>{selectedBot.app_secret_masked || "-"}</div>
+                      <div className="mt-1 font-medium">
+                        {selectedBot.app_secret_masked || "-"}
+                      </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">状态</div>
-                      <div className="flex items-center gap-2">
+                      <div className="mt-1">
                         <Badge variant={stateVariant(selectedBot.state)}>
                           {selectedBot.state}
                         </Badge>
-                        {selectedBot.last_error ? (
-                          <span className="text-destructive text-xs">
-                            {selectedBot.last_error}
-                          </span>
-                        ) : null}
                       </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-xl border bg-background/80 p-4 md:col-span-2 xl:col-span-2">
                       <div className="text-muted-foreground text-xs">
                         Workspace
                       </div>
-                      <div className="break-all text-sm">
+                      <div className="mt-1 break-all font-medium text-sm">
                         {selectedBot.workspace || "-"}
                       </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-xl border bg-background/80 p-4 md:col-span-2 xl:col-span-1">
                       <div className="text-muted-foreground text-xs">
                         Config
                       </div>
-                      <div className="break-all text-sm">
+                      <div className="mt-1 break-all font-medium text-sm">
                         {selectedBot.config_path || "-"}
                       </div>
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">
-                        更新时间
-                      </div>
-                      <div>{formatTimestamp(selectedBot.updated_at)}</div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">
-                        最近启动
-                      </div>
-                      <div>{formatTimestamp(selectedBot.last_started_at)}</div>
-                    </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={handleEditBot}
-                      type="button"
-                      variant="outline"
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={() => {
-                        handleBotAction("start");
-                      }}
-                      type="button"
-                      variant="default"
-                    >
-                      启动
-                    </Button>
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={() => {
-                        handleBotAction("stop");
-                      }}
-                      type="button"
-                      variant="outline"
-                    >
-                      停止
-                    </Button>
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={() => {
-                        handleBotAction("status");
-                      }}
-                      type="button"
-                      variant="outline"
-                    >
-                      状态
-                    </Button>
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={() => {
-                        handleBotAction("doctor");
-                      }}
-                      type="button"
-                      variant="outline"
-                    >
-                      诊断
-                    </Button>
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={() => {
-                        handleBotAction("rebuild");
-                      }}
-                      type="button"
-                      variant="outline"
-                    >
-                      重建
-                    </Button>
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={() => {
-                        refreshCurrentBot();
-                      }}
-                      type="button"
-                      variant="outline"
-                    >
-                      刷新详情
-                    </Button>
-                    <Button
-                      disabled={busyAction !== null}
-                      onClick={() => {
-                        setDeleteDialogOpen(true);
-                      }}
-                      type="button"
-                      variant="destructive"
-                    >
-                      删除 Channel
-                    </Button>
-                  </div>
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      <div className="rounded-xl border bg-background/80 p-4">
+                        <div className="space-y-1">
+                          <div className="font-medium text-sm">配置</div>
+                          <div className="text-muted-foreground text-xs">
+                            调整 channel 配置并刷新当前详情。
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Button
+                            aria-disabled={selectedBotRunning}
+                            className={cn(
+                              selectedBotRunning
+                                ? "border-dashed border-muted-foreground/30 text-muted-foreground opacity-60 hover:bg-background hover:text-muted-foreground"
+                                : null
+                            )}
+                            disabled={busyAction !== null}
+                            onClick={handleEditRequest}
+                            type="button"
+                            variant="outline"
+                          >
+                            编辑配置
+                          </Button>
+                          <Button
+                            disabled={busyAction !== null}
+                            onClick={() => {
+                              refreshCurrentBot();
+                            }}
+                            type="button"
+                            variant="outline"
+                          >
+                            刷新详情
+                          </Button>
+                        </div>
+                      </div>
 
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div className="space-y-2">
-                        <Label htmlFor="logLines">日志行数</Label>
-                        <Input
-                          id="logLines"
-                          onChange={(event) => setLogLines(event.target.value)}
-                          value={logLines}
-                        />
+                      <div className="rounded-xl border bg-background/80 p-4">
+                        <div className="space-y-1">
+                          <div className="font-medium text-sm">运行控制</div>
+                          <div className="text-muted-foreground text-xs">
+                            查看运行状态，并执行启动或停止。
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Button
+                            disabled={busyAction !== null || selectedBotRunning}
+                            onClick={() => {
+                              handleBotAction("start");
+                            }}
+                            type="button"
+                            variant="default"
+                          >
+                            启动
+                          </Button>
+                          <Button
+                            disabled={
+                              busyAction !== null || !selectedBotRunning
+                            }
+                            onClick={() => {
+                              handleBotAction("stop");
+                            }}
+                            type="button"
+                            variant="outline"
+                          >
+                            停止
+                          </Button>
+                          <Button
+                            disabled={busyAction !== null}
+                            onClick={() => {
+                              handleBotAction("status");
+                            }}
+                            type="button"
+                            variant="outline"
+                          >
+                            状态
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border bg-background/80 p-4">
+                        <div className="space-y-1">
+                          <div className="font-medium text-sm">诊断与维护</div>
+                          <div className="text-muted-foreground text-xs">
+                            诊断、重建并查看运行日志。
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Button
+                            disabled={busyAction !== null}
+                            onClick={() => {
+                              handleBotAction("doctor");
+                            }}
+                            type="button"
+                            variant="outline"
+                          >
+                            诊断
+                          </Button>
+                          <Button
+                            disabled={busyAction !== null}
+                            onClick={() => {
+                              handleBotAction("rebuild");
+                            }}
+                            type="button"
+                            variant="outline"
+                          >
+                            重建
+                          </Button>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)] sm:items-end">
+                          <div className="space-y-2">
+                            <Label htmlFor="logLines">日志行数</Label>
+                            <Input
+                              id="logLines"
+                              onChange={(event) =>
+                                setLogLines(event.target.value)
+                              }
+                              value={logLines}
+                            />
+                          </div>
+                          <Button
+                            disabled={busyAction !== null}
+                            onClick={() => {
+                              handleLoadLogs();
+                            }}
+                            type="button"
+                            variant="outline"
+                          >
+                            加载日志
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+                      <div className="space-y-1">
+                        <div className="font-medium text-destructive text-sm">
+                          危险操作
+                        </div>
+                        <div className="text-muted-foreground text-xs">
+                          删除 channel 后，会同时移除 tenant 工作区和注册记录。
+                        </div>
                       </div>
                       <Button
+                        className="mt-4 w-full"
                         disabled={busyAction !== null}
                         onClick={() => {
-                          handleLoadLogs();
+                          setDeleteDialogOpen(true);
                         }}
                         type="button"
-                        variant="outline"
+                        variant="destructive"
                       >
-                        加载日志
+                        删除 Channel
                       </Button>
                     </div>
                   </div>
