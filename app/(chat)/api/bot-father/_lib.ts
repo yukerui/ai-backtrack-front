@@ -1,9 +1,9 @@
 import { auth } from "@/app/(auth)/auth";
 import {
-  getBotFatherAccessibleBotSlugs,
-  hasBotFatherConsoleAccess,
+  getBotFatherStaticallyBoundBotSlugs,
   isBotFatherAdminEmail,
 } from "@/lib/bot-father-admin";
+import { listBotFatherBoundSlugsByUserId } from "@/lib/db/queries";
 import { ChatSDKError, type ErrorCode } from "@/lib/errors";
 
 function normalizeBase(url: string) {
@@ -15,13 +15,21 @@ export async function requireBotFatherSession() {
   if (!session?.user) {
     throw new ChatSDKError("unauthorized:api", "login_required");
   }
-  if (!hasBotFatherConsoleAccess(session.user.email)) {
+  if (session.user.type === "guest") {
     throw new ChatSDKError("forbidden:api", "bot_father_admin_required");
   }
+  const isAdmin = isBotFatherAdminEmail(session.user.email);
+  const staticBotSlugs = getBotFatherStaticallyBoundBotSlugs(session.user.email);
+  const boundBotSlugs = isAdmin
+    ? []
+    : await listBotFatherBoundSlugsByUserId({ userId: session.user.id });
+
   return {
     session,
-    isAdmin: isBotFatherAdminEmail(session.user.email),
-    accessibleBotSlugs: getBotFatherAccessibleBotSlugs(session.user.email),
+    isAdmin,
+    accessibleBotSlugs: isAdmin
+      ? []
+      : Array.from(new Set([...boundBotSlugs, ...staticBotSlugs])),
   };
 }
 

@@ -151,11 +151,9 @@ function stateVariant(state: string): BadgeProps["variant"] {
 }
 
 export function BotFatherConsole({
-  accessibleBotSlugs,
   currentUserEmail,
   isAdmin,
 }: {
-  accessibleBotSlugs: string[];
   currentUserEmail: string;
   isAdmin: boolean;
 }) {
@@ -353,16 +351,15 @@ export function BotFatherConsole({
         <p className="text-muted-foreground text-sm">
           {isAdmin
             ? `已登录管理员：${currentUserEmail}。这里直接管理 Feishu Bot Father 的租户注册、启停、日志、重建、密钥轮换和删除，不再依赖聊天命令。`
-            : `当前登录邮箱：${currentUserEmail}。你只会看到已关联到自己的 bot：${accessibleBotSlugs.join(", ") || "-"}`}
+            : `当前登录账号：${currentUserEmail}。你可以创建新的 Feishu bot，并管理当前账号名下的全部 bot。`}
         </p>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(360px,420px)_minmax(0,1fr)]">
         <div className="space-y-6">
-          {isAdmin ? (
-            <Card>
+          <Card>
             <CardHeader>
-              <CardTitle>飞书接入说明</CardTitle>
+              <CardTitle>{isAdmin ? "飞书接入说明" : "创建前准备"}</CardTitle>
               <CardDescription>
                 先在飞书开放平台创建企业自建应用，再把 App ID / App Secret 填到右侧表单。
               </CardDescription>
@@ -385,10 +382,12 @@ export function BotFatherConsole({
                 <li>在“添加应用能力”里启用 Bot</li>
                 <li>在“事件与回调”里选择长连接，并添加 im.message.receive_v1</li>
                 <li>在“版本管理与发布”里创建版本并发布</li>
+                {!isAdmin ? (
+                  <li>通过这个页面创建的 bot 会自动归属到当前网站账号</li>
+                ) : null}
               </ol>
             </CardContent>
-            </Card>
-          ) : null}
+          </Card>
 
           {isAdmin ? (
             <Card>
@@ -417,12 +416,13 @@ export function BotFatherConsole({
             </Card>
           ) : null}
 
-          {isAdmin ? (
-            <Card>
+          <Card>
             <CardHeader>
               <CardTitle>创建 / 更新 Bot</CardTitle>
               <CardDescription>
-                对应原来的 `/new` 和 `/register`。这里直接一次性提交完整字段。
+                {isAdmin
+                  ? "对应原来的 `/new` 和 `/register`。这里直接一次性提交完整字段。"
+                  : "创建成功后，当前登录账号会自动获得这个 bot 的网页管理权限。"}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -545,19 +545,21 @@ export function BotFatherConsole({
                     />
                     创建后立即启动
                   </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      checked={createForm.force}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          force: event.target.checked,
-                        }))
-                      }
-                      type="checkbox"
-                    />
-                    已存在时强制覆盖
-                  </label>
+                  {isAdmin ? (
+                    <label className="flex items-center gap-2">
+                      <input
+                        checked={createForm.force}
+                        onChange={(event) =>
+                          setCreateForm((current) => ({
+                            ...current,
+                            force: event.target.checked,
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      已存在时强制覆盖
+                    </label>
+                  ) : null}
                 </div>
 
                 <Button disabled={busyAction === "create"} type="submit">
@@ -565,26 +567,7 @@ export function BotFatherConsole({
                 </Button>
               </form>
             </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardHeader>
-                <CardTitle>已关联 Bot</CardTitle>
-                <CardDescription>
-                  当前账号只允许管理这些 bot。创建新 bot 仍需管理员账号。
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm text-muted-foreground">
-                {accessibleBotSlugs.length > 0 ? (
-                  accessibleBotSlugs.map((botSlug) => (
-                    <div key={botSlug}>{botSlug}</div>
-                  ))
-                ) : (
-                  <div>未配置</div>
-                )}
-              </CardContent>
-            </Card>
-          )}
+          </Card>
         </div>
 
         <div className="space-y-6">
@@ -592,7 +575,9 @@ export function BotFatherConsole({
             <CardHeader>
               <CardTitle>Bot 列表</CardTitle>
               <CardDescription>
-                对应原来的 `/list`、`/describe`、`/status`、`/logs`、`/doctor`、`/rebuild` 和 admin 删除操作。
+                {isAdmin
+                  ? "对应原来的 `/list`、`/describe`、`/status`、`/logs`、`/doctor`、`/rebuild` 和删除操作。"
+                  : "这里只显示当前登录账号拥有的 bot，你可以直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。"}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -616,7 +601,9 @@ export function BotFatherConsole({
                 </p>
               ) : null}
               {!botsLoading && botList.length === 0 ? (
-                <p className="text-muted-foreground text-sm">当前还没有注册任何 bot。</p>
+                <p className="text-muted-foreground text-sm">
+                  {isAdmin ? "当前还没有注册任何 bot。" : "你还没有创建任何 bot。"}
+                </p>
               ) : null}
               <div className="space-y-3">
                 {botList.map((bot) => {
