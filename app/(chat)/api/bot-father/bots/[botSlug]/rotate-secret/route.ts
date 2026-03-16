@@ -1,6 +1,7 @@
 import {
+  assertBotFatherBotAccess,
   proxyBotFatherJson,
-  requireBotFatherAdminSession,
+  requireBotFatherSession,
   toBotFatherRouteErrorResponse,
 } from "../../../_lib";
 
@@ -12,8 +13,13 @@ type RouteContext = {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    await requireBotFatherAdminSession();
+    const access = await requireBotFatherSession();
     const { botSlug } = await context.params;
+    assertBotFatherBotAccess({
+      botSlug,
+      isAdmin: access.isAdmin,
+      accessibleBotSlugs: access.accessibleBotSlugs,
+    });
     const body = await request.json().catch(() => ({}));
     return proxyBotFatherJson(
       `/v1/bot-father/bots/${encodeURIComponent(botSlug)}/rotate-secret`,

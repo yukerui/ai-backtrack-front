@@ -1,20 +1,53 @@
 import { auth } from "@/app/(auth)/auth";
-import { isBotFatherAdminEmail } from "@/lib/bot-father-admin";
+import {
+  getBotFatherAccessibleBotSlugs,
+  hasBotFatherConsoleAccess,
+  isBotFatherAdminEmail,
+} from "@/lib/bot-father-admin";
 import { ChatSDKError, type ErrorCode } from "@/lib/errors";
 
 function normalizeBase(url: string) {
   return url.endsWith("/") ? url.slice(0, -1) : url;
 }
 
-export async function requireBotFatherAdminSession() {
+export async function requireBotFatherSession() {
   const session = await auth();
   if (!session?.user) {
     throw new ChatSDKError("unauthorized:api", "login_required");
   }
-  if (!isBotFatherAdminEmail(session.user.email)) {
+  if (!hasBotFatherConsoleAccess(session.user.email)) {
     throw new ChatSDKError("forbidden:api", "bot_father_admin_required");
   }
-  return session;
+  return {
+    session,
+    isAdmin: isBotFatherAdminEmail(session.user.email),
+    accessibleBotSlugs: getBotFatherAccessibleBotSlugs(session.user.email),
+  };
+}
+
+export async function requireBotFatherAdminSession() {
+  const access = await requireBotFatherSession();
+  if (!access.isAdmin) {
+    throw new ChatSDKError("forbidden:api", "bot_father_admin_required");
+  }
+  return access;
+}
+
+export function assertBotFatherBotAccess({
+  botSlug,
+  isAdmin,
+  accessibleBotSlugs,
+}: {
+  botSlug: string;
+  isAdmin: boolean;
+  accessibleBotSlugs: string[];
+}) {
+  if (isAdmin) {
+    return;
+  }
+  if (!accessibleBotSlugs.includes(botSlug)) {
+    throw new ChatSDKError("forbidden:api", "bot_father_bot_not_accessible");
+  }
 }
 
 export function getBotFatherBackendConfig() {

@@ -1,6 +1,7 @@
 import {
+  assertBotFatherBotAccess,
   proxyBotFatherJson,
-  requireBotFatherAdminSession,
+  requireBotFatherSession,
   toBotFatherRouteErrorResponse,
 } from "../../../_lib";
 
@@ -12,8 +13,13 @@ type RouteContext = {
 
 export async function GET(request: Request, context: RouteContext) {
   try {
-    await requireBotFatherAdminSession();
+    const access = await requireBotFatherSession();
     const { botSlug } = await context.params;
+    assertBotFatherBotAccess({
+      botSlug,
+      isAdmin: access.isAdmin,
+      accessibleBotSlugs: access.accessibleBotSlugs,
+    });
     const { searchParams } = new URL(request.url);
     const lines = searchParams.get("lines") || "120";
     return proxyBotFatherJson(

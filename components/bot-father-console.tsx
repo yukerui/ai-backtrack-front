@@ -151,9 +151,13 @@ function stateVariant(state: string): BadgeProps["variant"] {
 }
 
 export function BotFatherConsole({
+  accessibleBotSlugs,
   currentUserEmail,
+  isAdmin,
 }: {
+  accessibleBotSlugs: string[];
   currentUserEmail: string;
+  isAdmin: boolean;
 }) {
   const [selectedBotSlug, setSelectedBotSlug] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState<CreateFormState>(DEFAULT_CREATE_FORM);
@@ -169,7 +173,7 @@ export function BotFatherConsole({
     data: infoData,
     error: infoError,
     isLoading: infoLoading,
-  } = useSWR<InfoResponse>("/api/bot-father/info", fetcher);
+  } = useSWR<InfoResponse>(isAdmin ? "/api/bot-father/info" : null, fetcher);
   const {
     data: botsData,
     error: botsError,
@@ -347,14 +351,16 @@ export function BotFatherConsole({
       <div className="space-y-2">
         <h1 className="font-semibold text-2xl tracking-tight">Bot Father 管理台</h1>
         <p className="text-muted-foreground text-sm">
-          已登录管理员：{currentUserEmail}。这里直接管理 Feishu Bot Father 的租户注册、
-          启停、日志、重建、密钥轮换和删除，不再依赖聊天命令。
+          {isAdmin
+            ? `已登录管理员：${currentUserEmail}。这里直接管理 Feishu Bot Father 的租户注册、启停、日志、重建、密钥轮换和删除，不再依赖聊天命令。`
+            : `当前登录邮箱：${currentUserEmail}。你只会看到已关联到自己的 bot：${accessibleBotSlugs.join(", ") || "-"}`}
         </p>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(360px,420px)_minmax(0,1fr)]">
         <div className="space-y-6">
-          <Card>
+          {isAdmin ? (
+            <Card>
             <CardHeader>
               <CardTitle>飞书接入说明</CardTitle>
               <CardDescription>
@@ -381,9 +387,11 @@ export function BotFatherConsole({
                 <li>在“版本管理与发布”里创建版本并发布</li>
               </ol>
             </CardContent>
-          </Card>
+            </Card>
+          ) : null}
 
-          <Card>
+          {isAdmin ? (
+            <Card>
             <CardHeader>
               <CardTitle>运行环境</CardTitle>
               <CardDescription>当前网页管理台连接的 Bot Father 后端配置。</CardDescription>
@@ -406,9 +414,11 @@ export function BotFatherConsole({
                 </div>
               ) : null}
             </CardContent>
-          </Card>
+            </Card>
+          ) : null}
 
-          <Card>
+          {isAdmin ? (
+            <Card>
             <CardHeader>
               <CardTitle>创建 / 更新 Bot</CardTitle>
               <CardDescription>
@@ -555,7 +565,26 @@ export function BotFatherConsole({
                 </Button>
               </form>
             </CardContent>
-          </Card>
+            </Card>
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle>已关联 Bot</CardTitle>
+                <CardDescription>
+                  当前账号只允许管理这些 bot。创建新 bot 仍需管理员账号。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm text-muted-foreground">
+                {accessibleBotSlugs.length > 0 ? (
+                  accessibleBotSlugs.map((botSlug) => (
+                    <div key={botSlug}>{botSlug}</div>
+                  ))
+                ) : (
+                  <div>未配置</div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <div className="space-y-6">

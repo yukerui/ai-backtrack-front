@@ -1,13 +1,23 @@
 import {
   proxyBotFatherJson,
   requireBotFatherAdminSession,
+  requireBotFatherSession,
   toBotFatherRouteErrorResponse,
 } from "../_lib";
 
 export async function GET() {
   try {
-    await requireBotFatherAdminSession();
-    return proxyBotFatherJson("/v1/bot-father/bots");
+    const access = await requireBotFatherSession();
+    const response = await proxyBotFatherJson("/v1/bot-father/bots");
+    const payload = await response.json();
+    if (!access.isAdmin) {
+      payload.bots = Array.isArray(payload?.bots)
+        ? payload.bots.filter((bot: { bot_slug?: string }) =>
+            access.accessibleBotSlugs.includes(String(bot?.bot_slug || ""))
+          )
+        : [];
+    }
+    return Response.json(payload, { status: response.status });
   } catch (error) {
     return toBotFatherRouteErrorResponse(error, "Failed to list bots");
   }
