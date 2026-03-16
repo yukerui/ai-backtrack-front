@@ -347,11 +347,11 @@ export function BotFatherConsole({
   return (
     <div className="flex h-full flex-col gap-6 p-4 md:p-6">
       <div className="space-y-2">
-        <h1 className="font-semibold text-2xl tracking-tight">Bot Father 管理台</h1>
+        <h1 className="font-semibold text-2xl tracking-tight">Channels</h1>
         <p className="text-muted-foreground text-sm">
           {isAdmin
-            ? `已登录管理员：${currentUserEmail}。这里直接管理 Feishu Bot Father 的租户注册、启停、日志、重建、密钥轮换和删除，不再依赖聊天命令。`
-            : `当前登录账号：${currentUserEmail}。你可以创建新的 Feishu bot，并管理当前账号名下的全部 bot。`}
+            ? `已登录管理员：${currentUserEmail}。这里直接管理全部 Feishu channels 的注册、启停、日志、重建、密钥轮换和删除，不再依赖聊天命令。`
+            : `当前登录账号：${currentUserEmail}。你可以创建新的 Feishu channel，并管理当前账号名下的全部 channels。`}
         </p>
       </div>
 
@@ -393,7 +393,7 @@ export function BotFatherConsole({
             <Card>
             <CardHeader>
               <CardTitle>运行环境</CardTitle>
-              <CardDescription>当前网页管理台连接的 Bot Father 后端配置。</CardDescription>
+              <CardDescription>当前 Channels 页面连接的后端配置。</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               {infoLoading ? <p>加载中...</p> : null}
@@ -418,11 +418,11 @@ export function BotFatherConsole({
 
           <Card>
             <CardHeader>
-              <CardTitle>创建 / 更新 Bot</CardTitle>
+              <CardTitle>创建 / 更新 Channel</CardTitle>
               <CardDescription>
                 {isAdmin
-                  ? "对应原来的 `/new` 和 `/register`。这里直接一次性提交完整字段。"
-                  : "创建成功后，当前登录账号会自动获得这个 bot 的网页管理权限。"}
+                  ? "这里直接一次性提交完整字段，创建或覆盖一个 Feishu channel。"
+                  : "创建成功后，当前登录账号会自动获得这个 channel 的网页管理权限。"}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -563,7 +563,7 @@ export function BotFatherConsole({
                 </div>
 
                 <Button disabled={busyAction === "create"} type="submit">
-                  {busyAction === "create" ? "提交中..." : "创建 / 更新 Bot"}
+                  {busyAction === "create" ? "提交中..." : "创建 / 更新 Channel"}
                 </Button>
               </form>
             </CardContent>
@@ -573,11 +573,11 @@ export function BotFatherConsole({
         <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Bot 列表</CardTitle>
+              <CardTitle>Channels</CardTitle>
               <CardDescription>
                 {isAdmin
-                  ? "对应原来的 `/list`、`/describe`、`/status`、`/logs`、`/doctor`、`/rebuild` 和删除操作。"
-                  : "这里只显示当前登录账号拥有的 bot，你可以直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。"}
+                  ? "这里展示全部 channels，你可以直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。"
+                  : "这里只显示当前登录账号拥有的 channels，你可以直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。"}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -602,7 +602,7 @@ export function BotFatherConsole({
               ) : null}
               {!botsLoading && botList.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
-                  {isAdmin ? "当前还没有注册任何 bot。" : "你还没有创建任何 bot。"}
+                  {isAdmin ? "当前还没有注册任何 channel。" : "你还没有创建任何 channel。"}
                 </p>
               ) : null}
               <div className="space-y-3">
@@ -643,14 +643,14 @@ export function BotFatherConsole({
 
           <Card>
             <CardHeader>
-              <CardTitle>Bot 详情与操作</CardTitle>
+              <CardTitle>Channel 详情与操作</CardTitle>
               <CardDescription>
-                选中一个 bot 后，可直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。
+                选中一个 channel 后，可直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               {!selectedBotSlug ? (
-                <p className="text-muted-foreground text-sm">先从上方选择一个 bot。</p>
+                <p className="text-muted-foreground text-sm">先从上方选择一个 channel。</p>
               ) : null}
               {detailLoading ? (
                 <p className="text-muted-foreground text-sm">正在加载详情...</p>
@@ -831,7 +831,7 @@ export function BotFatherConsole({
                         type="button"
                         variant="destructive"
                       >
-                        删除 Bot
+                        删除 Channel
                       </Button>
                     </div>
                   </form>
