@@ -1,8 +1,5 @@
-import { auth } from "@/app/(auth)/auth";
-import { ChatHistoryPage } from "@/components/chat-history-page";
+import { redirect } from "next/navigation";
 
 export default async function Page() {
-  const session = await auth();
-
-  return <ChatHistoryPage user={session?.user} />;
+  redirect("/chat/new");
 }

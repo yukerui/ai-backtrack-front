@@ -859,11 +859,16 @@ export function BotFatherConsole({
                         </pre>
                       </CollapsibleContent>
                     </Collapsible>
-                    <div className="rounded-xl border bg-muted/30 p-3 text-muted-foreground text-xs">
-                      <p>5. 在“添加应用能力”里启用 Bot。</p>
-                      <p>6. 在“事件与回调”里选择长连接。</p>
-                      <p>7. 添加事件 `im.message.receive_v1`。</p>
-                      <p>8. 最后在“版本管理与发布”里创建版本并发布。</p>
+                    <div className="rounded-xl border border-dashed bg-background p-4">
+                      <div className="mb-2 font-medium text-foreground text-sm">
+                        继续完成以下配置
+                      </div>
+                      <ol className="list-decimal space-y-2 pl-5 text-foreground text-sm leading-6">
+                        <li>在“添加应用能力”里启用 Bot。</li>
+                        <li>在“事件与回调”里选择长连接。</li>
+                        <li>添加事件 `im.message.receive_v1`。</li>
+                        <li>最后在“版本管理与发布”里创建版本并发布。</li>
+                      </ol>
                     </div>
                   </div>
                 </StepCard>
