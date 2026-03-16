@@ -1,16 +1,18 @@
+import { upsertBotFatherBinding } from "@/lib/db/queries";
 import {
   fetchBotFatherBackend,
   requireBotFatherSession,
   toBotFatherRouteErrorResponse,
 } from "../_lib";
-import { upsertBotFatherBinding } from "@/lib/db/queries";
 
 async function toBotFatherJsonResponse(response: Response) {
   const raw = await response.text();
   if (!response.ok) {
-    let parsed:
-      | Partial<{ error: { message?: unknown }; message?: unknown; cause?: unknown }>
-      | null = null;
+    let parsed: Partial<{
+      error: { message?: unknown };
+      message?: unknown;
+      cause?: unknown;
+    }> | null = null;
     try {
       parsed = raw ? JSON.parse(raw) : null;
     } catch {
@@ -68,10 +70,27 @@ export async function POST(request: Request) {
   try {
     const access = await requireBotFatherSession();
     const body = await request.json().catch(() => ({}));
-    const normalizedBody =
-      body && typeof body === "object" ? { ...body } : {};
+    const normalizedBody = body && typeof body === "object" ? { ...body } : {};
+    const botSlug = String(normalizedBody.botSlug || "").trim();
     if (!access.isAdmin) {
-      normalizedBody.force = false;
+      const canUpdateExisting =
+        botSlug.length > 0 && access.accessibleBotSlugs.includes(botSlug);
+      normalizedBody.force = canUpdateExisting;
+      if (canUpdateExisting) {
+        const detailResponse = await fetchBotFatherBackend(
+          `/v1/bot-father/bots/${encodeURIComponent(botSlug)}`
+        );
+        const detail = await toBotFatherJsonResponse(detailResponse);
+        if (detail instanceof Response) {
+          return detail;
+        }
+        const existingOwnerOpenId = String(
+          detail.payload?.bot?.owner_open_id || ""
+        ).trim();
+        if (existingOwnerOpenId) {
+          normalizedBody.ownerOpenId = existingOwnerOpenId;
+        }
+      }
     }
     const response = await fetchBotFatherBackend("/v1/bot-father/bots", {
       method: "POST",
@@ -82,7 +101,6 @@ export async function POST(request: Request) {
       return normalized;
     }
     const payload = normalized.payload;
-    const botSlug = String(normalizedBody.botSlug || "").trim();
     if (!access.isAdmin && botSlug) {
       await upsertBotFatherBinding({
         botSlug,
