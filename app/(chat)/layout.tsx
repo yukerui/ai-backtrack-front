@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { DataStreamProvider } from "@/components/data-stream-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { isBotFatherAdminEmail } from "@/lib/bot-father-admin";
+import { hasBotFatherConsoleAccess } from "@/lib/bot-father-admin";
 import { auth } from "../(auth)/auth";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -26,7 +26,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 async function SidebarWrapper({ children }: { children: React.ReactNode }) {
   const [session, cookieStore] = await Promise.all([auth(), cookies()]);
   const isCollapsed = cookieStore.get("sidebar_state")?.value !== "true";
-  const showBotFather = isBotFatherAdminEmail(session?.user?.email);
+  const showBotFather = hasBotFatherConsoleAccess(session?.user?.email);
 
   return (
     <SidebarProvider defaultOpen={!isCollapsed}>
