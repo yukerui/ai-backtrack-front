@@ -11,6 +11,7 @@ import {
   inArray,
   lt,
   ne,
+  sql,
   type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -21,6 +22,7 @@ import { ChatSDKError } from "../errors";
 import { generateUUID } from "../utils";
 import {
   type Chat,
+  botFatherBinding,
   chat,
   type DBMessage,
   document,
@@ -42,6 +44,44 @@ import { generateHashedPassword } from "./utils";
 // biome-ignore lint: Forbidden non-null assertion.
 const client = postgres(process.env.POSTGRES_URL!);
 const db = drizzle(client);
+let botFatherBindingSchemaPromise: Promise<void> | null = null;
+
+async function ensureBotFatherBindingTable() {
+  if (!botFatherBindingSchemaPromise) {
+    botFatherBindingSchemaPromise = (async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "BotFatherBinding" (
+          "botSlug" varchar(64) PRIMARY KEY NOT NULL,
+          "userId" uuid NOT NULL,
+          "userEmail" varchar(255) NOT NULL,
+          "createdAt" timestamp NOT NULL,
+          "updatedAt" timestamp NOT NULL
+        )
+      `);
+      await db.execute(sql`
+        DO $$ BEGIN
+          ALTER TABLE "BotFatherBinding"
+          ADD CONSTRAINT "BotFatherBinding_userId_User_id_fk"
+          FOREIGN KEY ("userId") REFERENCES "public"."User"("id")
+          ON DELETE cascade
+          ON UPDATE no action;
+        EXCEPTION
+          WHEN duplicate_object THEN null;
+        END $$;
+      `);
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS "BotFatherBinding_user_idx"
+        ON "BotFatherBinding" USING btree ("userId")
+      `);
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS "BotFatherBinding_email_idx"
+        ON "BotFatherBinding" USING btree ("userEmail")
+      `);
+    })();
+  }
+
+  return botFatherBindingSchemaPromise;
+}
 
 export async function getUser(email: string): Promise<User[]> {
   try {
@@ -146,6 +186,110 @@ export async function createGuestUser() {
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to create guest user"
+    );
+  }
+}
+
+export async function listBotFatherBindingsByUserId({
+  userId,
+}: {
+  userId: string;
+}) {
+  if (!userId) {
+    return [];
+  }
+
+  await ensureBotFatherBindingTable();
+
+  try {
+    return await db
+      .select({
+        botSlug: botFatherBinding.botSlug,
+        userId: botFatherBinding.userId,
+        userEmail: botFatherBinding.userEmail,
+        createdAt: botFatherBinding.createdAt,
+        updatedAt: botFatherBinding.updatedAt,
+      })
+      .from(botFatherBinding)
+      .where(eq(botFatherBinding.userId, userId))
+      .orderBy(asc(botFatherBinding.createdAt));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to list Bot Father bindings by user id"
+    );
+  }
+}
+
+export async function listBotFatherBoundSlugsByUserId({
+  userId,
+}: {
+  userId: string;
+}) {
+  const rows = await listBotFatherBindingsByUserId({ userId });
+  return rows.map((row) => row.botSlug);
+}
+
+export async function upsertBotFatherBinding({
+  botSlug,
+  userId,
+  userEmail,
+}: {
+  botSlug: string;
+  userId: string;
+  userEmail: string;
+}) {
+  if (!botSlug || !userId || !userEmail) {
+    return;
+  }
+
+  await ensureBotFatherBindingTable();
+
+  const now = new Date();
+
+  try {
+    await db
+      .insert(botFatherBinding)
+      .values({
+        botSlug,
+        userId,
+        userEmail,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: botFatherBinding.botSlug,
+        set: {
+          userId,
+          userEmail,
+          updatedAt: now,
+        },
+      });
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to save Bot Father binding"
+    );
+  }
+}
+
+export async function deleteBotFatherBinding({
+  botSlug,
+}: {
+  botSlug: string;
+}) {
+  if (!botSlug) {
+    return;
+  }
+
+  await ensureBotFatherBindingTable();
+
+  try {
+    await db.delete(botFatherBinding).where(eq(botFatherBinding.botSlug, botSlug));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to delete Bot Father binding"
     );
   }
 }

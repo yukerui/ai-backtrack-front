@@ -199,3 +199,22 @@ export const questionDigestDaily = pgTable(
 );
 
 export type QuestionDigestDaily = InferSelectModel<typeof questionDigestDaily>;
+
+export const botFatherBinding = pgTable(
+  "BotFatherBinding",
+  {
+    botSlug: varchar("botSlug", { length: 64 }).primaryKey().notNull(),
+    userId: uuid("userId")
+      .notNull()
+      .references(() => user.id),
+    userEmail: varchar("userEmail", { length: 255 }).notNull(),
+    createdAt: timestamp("createdAt").notNull(),
+    updatedAt: timestamp("updatedAt").notNull(),
+  },
+  (table) => ({
+    userIdx: index("BotFatherBinding_user_idx").on(table.userId),
+    emailIdx: index("BotFatherBinding_email_idx").on(table.userEmail),
+  })
+);
+
+export type BotFatherBinding = InferSelectModel<typeof botFatherBinding>;

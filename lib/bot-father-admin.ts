@@ -49,7 +49,13 @@ export function isBotFatherAdminEmail(email: string | null | undefined) {
   return BOT_FATHER_ADMIN_EMAILS.includes(normalized);
 }
 
-export function getBotFatherAccessibleBotSlugs(email: string | null | undefined) {
+export function getBotFatherStaticBotBindings() {
+  return BOT_FATHER_USER_BINDINGS;
+}
+
+export function getBotFatherStaticallyBoundBotSlugs(
+  email: string | null | undefined
+) {
   const normalized = String(email || "").trim().toLowerCase();
   if (!normalized) {
     return [];
@@ -58,21 +64,4 @@ export function getBotFatherAccessibleBotSlugs(email: string | null | undefined)
     return [];
   }
   return BOT_FATHER_USER_BINDINGS.get(normalized) || [];
-}
-
-export function hasBotFatherConsoleAccess(email: string | null | undefined) {
-  return (
-    isBotFatherAdminEmail(email) ||
-    getBotFatherAccessibleBotSlugs(email).length > 0
-  );
-}
-
-export function isBotFatherBotAccessible(
-  email: string | null | undefined,
-  botSlug: string
-) {
-  if (isBotFatherAdminEmail(email)) {
-    return true;
-  }
-  return getBotFatherAccessibleBotSlugs(email).includes(botSlug);
 }
