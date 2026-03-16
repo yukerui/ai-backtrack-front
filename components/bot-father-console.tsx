@@ -1,9 +1,21 @@
 "use client";
 
-import useSWR from "swr";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import useSWR from "swr";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import type { BadgeProps } from "@/components/ui/badge";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -11,13 +23,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
 import { getClientErrorMessage } from "@/lib/errors";
 import { fetcher } from "@/lib/utils";
-import type { BadgeProps } from "@/components/ui/badge";
 
 type BotSummary = {
   bot_slug: string;
@@ -105,6 +120,16 @@ const DEFAULT_CREATE_FORM: CreateFormState = {
   force: false,
 };
 
+const FEISHU_PERMISSION_IMPORT_JSON = `{
+  "scopes": {
+    "tenant": [
+      "im:message",
+      "im:message.reactions:write_only"
+    ],
+    "user": []
+  }
+}`;
+
 function formatTimestamp(value: string | null | undefined) {
   if (!value) {
     return "-";
@@ -158,11 +183,10 @@ export function BotFatherConsole({
   isAdmin: boolean;
 }) {
   const [selectedBotSlug, setSelectedBotSlug] = useState<string | null>(null);
-  const [createForm, setCreateForm] = useState<CreateFormState>(DEFAULT_CREATE_FORM);
-  const [secretForm, setSecretForm] = useState({
-    appSecret: "",
-    restart: true,
-  });
+  const [editingBotSlug, setEditingBotSlug] = useState<string | null>(null);
+  const [createForm, setCreateForm] =
+    useState<CreateFormState>(DEFAULT_CREATE_FORM);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [logLines, setLogLines] = useState("120");
@@ -188,7 +212,10 @@ export function BotFatherConsole({
       }
       return;
     }
-    if (!selectedBotSlug || !botList.some((bot) => bot.bot_slug === selectedBotSlug)) {
+    if (
+      !selectedBotSlug ||
+      !botList.some((bot) => bot.bot_slug === selectedBotSlug)
+    ) {
       setSelectedBotSlug(botList[0]?.bot_slug || null);
     }
   }, [botList, selectedBotSlug]);
@@ -215,6 +242,7 @@ export function BotFatherConsole({
 
   async function handleCreateBot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const editingSlug = editingBotSlug;
     setBusyAction("create");
     try {
       const result = await callApi<ActionResponse>("/api/bot-father/bots", {
@@ -236,10 +264,10 @@ export function BotFatherConsole({
       });
       setConsoleOutput(result.output || "创建完成");
       setCreateForm(DEFAULT_CREATE_FORM);
+      setEditingBotSlug(null);
       setSelectedBotSlug(createForm.botSlug);
-      setSecretForm({ appSecret: "", restart: true });
       await Promise.all([mutateBots(), mutateDetail()]);
-      toast.success("Bot 已创建");
+      toast.success(editingSlug ? "Channel 已更新" : "Channel 已创建");
     } catch (error) {
       toast.error(getClientErrorMessage(error));
     } finally {
@@ -287,42 +315,40 @@ export function BotFatherConsole({
     }
   }
 
-  async function handleRotateSecret(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedBotSlug) {
+  function resetCreateBotForm() {
+    setCreateForm(DEFAULT_CREATE_FORM);
+    setEditingBotSlug(null);
+  }
+
+  function handleEditBot() {
+    if (!selectedBot) {
       return;
     }
-    setBusyAction("rotate-secret");
-    try {
-      const result = await callApi<ActionResponse>(
-        `/api/bot-father/bots/${encodeURIComponent(selectedBotSlug)}/rotate-secret`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            appSecret: secretForm.appSecret,
-            restart: secretForm.restart,
-          }),
-        }
-      );
-      setSecretForm({ appSecret: "", restart: true });
-      setConsoleOutput(result.output || "密钥轮换完成");
-      await refreshCurrentBot();
-      toast.success("已轮换密钥");
-    } catch (error) {
-      toast.error(getClientErrorMessage(error));
-    } finally {
-      setBusyAction(null);
-    }
+    setCreateForm({
+      botSlug: selectedBot.bot_slug,
+      displayName: selectedBot.display_name || "",
+      ownerOpenId: selectedBot.owner_open_id,
+      ownerName: selectedBot.owner_name || "",
+      appId: selectedBot.app_id,
+      appSecret: "",
+      allowedUsersCsv: splitCsv(selectedBot.allowed_users_csv || "").join("\n"),
+      start: selectedBot.state === "running",
+      force: true,
+    });
+    setEditingBotSlug(selectedBot.bot_slug);
+    setConsoleOutput(
+      `已将 ${selectedBot.bot_slug} 的配置载入表单。出于安全原因，App Secret 不会自动回填。`
+    );
+    window.requestAnimationFrame(() => {
+      document.getElementById("channel-form-card")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   }
 
   async function handleDeleteBot() {
     if (!selectedBotSlug) {
-      return;
-    }
-    if (!window.confirm(`确认删除 ${selectedBotSlug} 吗？这会移除 tenant 工作区和注册记录。`)) {
       return;
     }
     setBusyAction("delete");
@@ -333,7 +359,9 @@ export function BotFatherConsole({
           method: "DELETE",
         }
       );
+      setDeleteDialogOpen(false);
       setConsoleOutput(result.output || `已删除 ${selectedBotSlug}`);
+      resetCreateBotForm();
       setSelectedBotSlug(null);
       await Promise.all([mutateBots(), mutateDetail()]);
       toast.success("Bot 已删除");
@@ -350,7 +378,7 @@ export function BotFatherConsole({
         <h1 className="font-semibold text-2xl tracking-tight">Channels</h1>
         <p className="text-muted-foreground text-sm">
           {isAdmin
-            ? `已登录管理员：${currentUserEmail}。这里直接管理全部 Feishu channels 的注册、启停、日志、重建、密钥轮换和删除，不再依赖聊天命令。`
+            ? `已登录管理员：${currentUserEmail}。这里直接管理全部 Feishu channels 的注册、编辑、启停、日志、重建和删除，不再依赖聊天命令。`
             : `当前登录账号：${currentUserEmail}。你可以创建新的 Feishu channel，并管理当前账号名下的全部 channels。`}
         </p>
       </div>
@@ -361,7 +389,8 @@ export function BotFatherConsole({
             <CardHeader>
               <CardTitle>{isAdmin ? "飞书接入说明" : "创建前准备"}</CardTitle>
               <CardDescription>
-                先在飞书开放平台创建企业自建应用，再把 App ID / App Secret 填到右侧表单。
+                先在飞书开放平台创建企业自建应用，再把 App ID / App Secret
+                填到右侧表单。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
@@ -379,54 +408,115 @@ export function BotFatherConsole({
                   创建企业自建应用
                 </li>
                 <li>在“凭证与基础信息”里复制 App ID 和 App Secret</li>
+                <li>
+                  获取 Owner Open ID 并填到右侧表单；可在{" "}
+                  <a
+                    className="font-medium text-foreground underline underline-offset-4"
+                    href="https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid"
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    如何获取 OpenID
+                  </a>{" "}
+                  查看
+                </li>
                 <li>在“添加应用能力”里启用 Bot</li>
-                <li>在“事件与回调”里选择长连接，并添加 im.message.receive_v1</li>
+                <li>
+                  在“事件与回调”里选择长连接，并添加 im.message.receive_v1
+                </li>
                 <li>在“版本管理与发布”里创建版本并发布</li>
-                {!isAdmin ? (
+                {isAdmin ? null : (
                   <li>通过这个页面创建的 bot 会自动归属到当前网站账号</li>
-                ) : null}
+                )}
               </ol>
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="space-y-1">
+                  <p className="font-medium text-foreground">权限配置</p>
+                  <p className="text-muted-foreground">
+                    在飞书开放平台进入“权限管理 -&gt; 批量导入/导出权限 -&gt;
+                    导入权限”，复制以下内容导入。
+                  </p>
+                </div>
+                <Collapsible className="mt-3" defaultOpen={false}>
+                  <CollapsibleTrigger asChild>
+                    <Button size="sm" type="button" variant="outline">
+                      查看权限导入 JSON
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <pre className="mt-3 overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs text-foreground">
+                      {FEISHU_PERMISSION_IMPORT_JSON}
+                    </pre>
+                  </CollapsibleContent>
+                </Collapsible>
+              </div>
             </CardContent>
           </Card>
 
           {isAdmin ? (
             <Card>
-            <CardHeader>
-              <CardTitle>运行环境</CardTitle>
-              <CardDescription>当前 Channels 页面连接的后端配置。</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {infoLoading ? <p>加载中...</p> : null}
-              {infoError ? (
-                <p className="text-destructive">
-                  {getClientErrorMessage(infoError)}
-                </p>
-              ) : null}
-              {infoData?.info ? (
-                <div className="space-y-2 break-all text-muted-foreground">
-                  <div>Home: {infoData.info.home}</div>
-                  <div>Root: {infoData.info.root}</div>
-                  <div>Config: {infoData.info.configFile}</div>
-                  <div>Python: {infoData.info.pythonExec}</div>
-                  <div>Registry: {infoData.info.registryExists ? "ok" : "missing"}</div>
-                  <div>Control Plane: {infoData.info.controlPlaneExists ? "ok" : "missing"}</div>
-                </div>
-              ) : null}
-            </CardContent>
+              <CardHeader>
+                <CardTitle>运行环境</CardTitle>
+                <CardDescription>
+                  当前 Channels 页面连接的后端配置。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {infoLoading ? <p>加载中...</p> : null}
+                {infoError ? (
+                  <p className="text-destructive">
+                    {getClientErrorMessage(infoError)}
+                  </p>
+                ) : null}
+                {infoData?.info ? (
+                  <div className="space-y-2 break-all text-muted-foreground">
+                    <div>Home: {infoData.info.home}</div>
+                    <div>Root: {infoData.info.root}</div>
+                    <div>Config: {infoData.info.configFile}</div>
+                    <div>Python: {infoData.info.pythonExec}</div>
+                    <div>
+                      Registry:{" "}
+                      {infoData.info.registryExists ? "ok" : "missing"}
+                    </div>
+                    <div>
+                      Control Plane:{" "}
+                      {infoData.info.controlPlaneExists ? "ok" : "missing"}
+                    </div>
+                  </div>
+                ) : null}
+              </CardContent>
             </Card>
           ) : null}
 
-          <Card>
+          <Card id="channel-form-card">
             <CardHeader>
-              <CardTitle>创建 / 更新 Channel</CardTitle>
+              <CardTitle>
+                {editingBotSlug
+                  ? `编辑 Channel：${editingBotSlug}`
+                  : "创建 / 更新 Channel"}
+              </CardTitle>
               <CardDescription>
-                {isAdmin
-                  ? "这里直接一次性提交完整字段，创建或覆盖一个 Feishu channel。"
-                  : "创建成功后，当前登录账号会自动获得这个 channel 的网页管理权限。"}
+                {editingBotSlug
+                  ? "已将当前 channel 回填到表单。保存修改时需要重新输入 App Secret。"
+                  : isAdmin
+                    ? "这里直接一次性提交完整字段，创建或覆盖一个 Feishu channel。"
+                    : "创建成功后，当前登录账号会自动获得这个 channel 的网页管理权限。"}
               </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-4" onSubmit={handleCreateBot}>
+                {editingBotSlug ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      disabled={busyAction !== null}
+                      onClick={resetCreateBotForm}
+                      type="button"
+                      variant="outline"
+                    >
+                      取消编辑
+                    </Button>
+                  </div>
+                ) : null}
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="botSlug">自定义标识</Label>
@@ -439,8 +529,14 @@ export function BotFatherConsole({
                         }))
                       }
                       placeholder="nasdaq_helper"
+                      readOnly={Boolean(editingBotSlug)}
                       value={createForm.botSlug}
                     />
+                    {editingBotSlug ? (
+                      <p className="text-muted-foreground text-xs">
+                        编辑已有 channel 时不可修改 slug。
+                      </p>
+                    ) : null}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="displayName">显示名称</Label>
@@ -467,8 +563,26 @@ export function BotFatherConsole({
                         }))
                       }
                       placeholder="ou_xxx"
+                      readOnly={Boolean(editingBotSlug)}
                       value={createForm.ownerOpenId}
                     />
+                    <p className="text-muted-foreground text-xs">
+                      {editingBotSlug ? (
+                        "编辑已有 channel 时不支持在这里迁移 owner。"
+                      ) : (
+                        <>
+                          不知道怎么获取可查看{" "}
+                          <a
+                            className="underline underline-offset-4"
+                            href="https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid"
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            飞书 OpenID 获取说明
+                          </a>
+                        </>
+                      )}
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="ownerName">Owner 名称</Label>
@@ -508,10 +622,19 @@ export function BotFatherConsole({
                           appSecret: event.target.value,
                         }))
                       }
-                      placeholder="输入后不会在页面回显"
+                      placeholder={
+                        editingBotSlug
+                          ? "编辑时需要重新输入 App Secret"
+                          : "输入后不会在页面回显"
+                      }
                       type="password"
                       value={createForm.appSecret}
                     />
+                    {editingBotSlug ? (
+                      <p className="text-muted-foreground text-xs">
+                        出于安全原因，现有 App Secret 不会回填到表单。
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 
@@ -563,7 +686,11 @@ export function BotFatherConsole({
                 </div>
 
                 <Button disabled={busyAction === "create"} type="submit">
-                  {busyAction === "create" ? "提交中..." : "创建 / 更新 Channel"}
+                  {busyAction === "create"
+                    ? "提交中..."
+                    : editingBotSlug
+                      ? "保存修改"
+                      : "创建 / 更新 Channel"}
                 </Button>
               </form>
             </CardContent>
@@ -576,8 +703,8 @@ export function BotFatherConsole({
               <CardTitle>Channels</CardTitle>
               <CardDescription>
                 {isAdmin
-                  ? "这里展示全部 channels，你可以直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。"
-                  : "这里只显示当前登录账号拥有的 channels，你可以直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。"}
+                  ? "这里展示全部 channels，你可以直接查看详情、编辑、启停、诊断、日志、重建和删除。"
+                  : "这里只显示当前登录账号拥有的 channels，你可以直接查看详情、编辑、启停、诊断、日志、重建和删除。"}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -585,8 +712,8 @@ export function BotFatherConsole({
                 <Button
                   disabled={busyAction !== null}
                   onClick={() => {
-                    void mutateBots();
-                    void mutateDetail();
+                    mutateBots();
+                    mutateDetail();
                   }}
                   type="button"
                   variant="outline"
@@ -594,7 +721,9 @@ export function BotFatherConsole({
                   刷新列表
                 </Button>
               </div>
-              {botsLoading ? <p className="text-sm text-muted-foreground">加载中...</p> : null}
+              {botsLoading ? (
+                <p className="text-sm text-muted-foreground">加载中...</p>
+              ) : null}
               {botsError ? (
                 <p className="text-destructive text-sm">
                   {getClientErrorMessage(botsError)}
@@ -602,7 +731,9 @@ export function BotFatherConsole({
               ) : null}
               {!botsLoading && botList.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
-                  {isAdmin ? "当前还没有注册任何 channel。" : "你还没有创建任何 channel。"}
+                  {isAdmin
+                    ? "当前还没有注册任何 channel。"
+                    : "你还没有创建任何 channel。"}
                 </p>
               ) : null}
               <div className="space-y-3">
@@ -621,12 +752,16 @@ export function BotFatherConsole({
                     >
                       <div className="flex w-full items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate font-medium">{bot.bot_slug}</div>
+                          <div className="truncate font-medium">
+                            {bot.bot_slug}
+                          </div>
                           <div className="truncate text-muted-foreground text-sm">
                             {bot.display_name || "未设置显示名称"}
                           </div>
                         </div>
-                        <Badge variant={stateVariant(bot.state)}>{bot.state}</Badge>
+                        <Badge variant={stateVariant(bot.state)}>
+                          {bot.state}
+                        </Badge>
                       </div>
                       <div className="w-full text-muted-foreground text-xs">
                         owner={bot.owner_open_id}
@@ -645,13 +780,16 @@ export function BotFatherConsole({
             <CardHeader>
               <CardTitle>Channel 详情与操作</CardTitle>
               <CardDescription>
-                选中一个 channel 后，可直接查看详情、启停、诊断、日志、重建、轮换密钥和删除。
+                选中一个 channel
+                后，可直接查看详情、编辑、启停、诊断、日志、重建和删除。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {!selectedBotSlug ? (
-                <p className="text-muted-foreground text-sm">先从上方选择一个 channel。</p>
-              ) : null}
+              {selectedBotSlug ? null : (
+                <p className="text-muted-foreground text-sm">
+                  先从上方选择一个 channel。
+                </p>
+              )}
               {detailLoading ? (
                 <p className="text-muted-foreground text-sm">正在加载详情...</p>
               ) : null}
@@ -664,19 +802,31 @@ export function BotFatherConsole({
                 <>
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">自定义标识</div>
-                      <div className="break-all font-medium">{selectedBot.bot_slug}</div>
+                      <div className="text-muted-foreground text-xs">
+                        自定义标识
+                      </div>
+                      <div className="break-all font-medium">
+                        {selectedBot.bot_slug}
+                      </div>
                     </div>
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">显示名称</div>
+                      <div className="text-muted-foreground text-xs">
+                        显示名称
+                      </div>
                       <div>{selectedBot.display_name || "-"}</div>
                     </div>
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">Owner Open ID</div>
-                      <div className="break-all">{selectedBot.owner_open_id}</div>
+                      <div className="text-muted-foreground text-xs">
+                        Owner Open ID
+                      </div>
+                      <div className="break-all">
+                        {selectedBot.owner_open_id}
+                      </div>
                     </div>
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">App ID</div>
+                      <div className="text-muted-foreground text-xs">
+                        App ID
+                      </div>
                       <div className="break-all">{selectedBot.app_id}</div>
                     </div>
                     <div className="space-y-1">
@@ -697,21 +847,31 @@ export function BotFatherConsole({
                       </div>
                     </div>
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">Workspace</div>
-                      <div className="break-all text-sm">{selectedBot.workspace || "-"}</div>
+                      <div className="text-muted-foreground text-xs">
+                        Workspace
+                      </div>
+                      <div className="break-all text-sm">
+                        {selectedBot.workspace || "-"}
+                      </div>
                     </div>
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">Config</div>
+                      <div className="text-muted-foreground text-xs">
+                        Config
+                      </div>
                       <div className="break-all text-sm">
                         {selectedBot.config_path || "-"}
                       </div>
                     </div>
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">更新时间</div>
+                      <div className="text-muted-foreground text-xs">
+                        更新时间
+                      </div>
                       <div>{formatTimestamp(selectedBot.updated_at)}</div>
                     </div>
                     <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs">最近启动</div>
+                      <div className="text-muted-foreground text-xs">
+                        最近启动
+                      </div>
                       <div>{formatTimestamp(selectedBot.last_started_at)}</div>
                     </div>
                   </div>
@@ -719,7 +879,17 @@ export function BotFatherConsole({
                   <div className="flex flex-wrap gap-2">
                     <Button
                       disabled={busyAction !== null}
-                      onClick={() => void handleBotAction("start")}
+                      onClick={handleEditBot}
+                      type="button"
+                      variant="outline"
+                    >
+                      编辑
+                    </Button>
+                    <Button
+                      disabled={busyAction !== null}
+                      onClick={() => {
+                        handleBotAction("start");
+                      }}
                       type="button"
                       variant="default"
                     >
@@ -727,7 +897,9 @@ export function BotFatherConsole({
                     </Button>
                     <Button
                       disabled={busyAction !== null}
-                      onClick={() => void handleBotAction("stop")}
+                      onClick={() => {
+                        handleBotAction("stop");
+                      }}
                       type="button"
                       variant="outline"
                     >
@@ -735,7 +907,9 @@ export function BotFatherConsole({
                     </Button>
                     <Button
                       disabled={busyAction !== null}
-                      onClick={() => void handleBotAction("status")}
+                      onClick={() => {
+                        handleBotAction("status");
+                      }}
                       type="button"
                       variant="outline"
                     >
@@ -743,7 +917,9 @@ export function BotFatherConsole({
                     </Button>
                     <Button
                       disabled={busyAction !== null}
-                      onClick={() => void handleBotAction("doctor")}
+                      onClick={() => {
+                        handleBotAction("doctor");
+                      }}
                       type="button"
                       variant="outline"
                     >
@@ -751,7 +927,9 @@ export function BotFatherConsole({
                     </Button>
                     <Button
                       disabled={busyAction !== null}
-                      onClick={() => void handleBotAction("rebuild")}
+                      onClick={() => {
+                        handleBotAction("rebuild");
+                      }}
                       type="button"
                       variant="outline"
                     >
@@ -759,11 +937,23 @@ export function BotFatherConsole({
                     </Button>
                     <Button
                       disabled={busyAction !== null}
-                      onClick={() => void refreshCurrentBot()}
+                      onClick={() => {
+                        refreshCurrentBot();
+                      }}
                       type="button"
                       variant="outline"
                     >
                       刷新详情
+                    </Button>
+                    <Button
+                      disabled={busyAction !== null}
+                      onClick={() => {
+                        setDeleteDialogOpen(true);
+                      }}
+                      type="button"
+                      variant="destructive"
+                    >
+                      删除 Channel
                     </Button>
                   </div>
 
@@ -779,7 +969,9 @@ export function BotFatherConsole({
                       </div>
                       <Button
                         disabled={busyAction !== null}
-                        onClick={() => void handleLoadLogs()}
+                        onClick={() => {
+                          handleLoadLogs();
+                        }}
                         type="button"
                         variant="outline"
                       >
@@ -787,54 +979,6 @@ export function BotFatherConsole({
                       </Button>
                     </div>
                   </div>
-
-                  <form className="space-y-3" onSubmit={handleRotateSecret}>
-                    <div className="space-y-2">
-                      <Label htmlFor="rotateSecret">轮换 App Secret</Label>
-                      <Input
-                        id="rotateSecret"
-                        onChange={(event) =>
-                          setSecretForm((current) => ({
-                            ...current,
-                            appSecret: event.target.value,
-                          }))
-                        }
-                        placeholder="输入新的 App Secret"
-                        type="password"
-                        value={secretForm.appSecret}
-                      />
-                    </div>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        checked={secretForm.restart}
-                        onChange={(event) =>
-                          setSecretForm((current) => ({
-                            ...current,
-                            restart: event.target.checked,
-                          }))
-                        }
-                        type="checkbox"
-                      />
-                      轮换后自动重启 bot
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        disabled={busyAction !== null}
-                        type="submit"
-                        variant="outline"
-                      >
-                        轮换密钥
-                      </Button>
-                      <Button
-                        disabled={busyAction !== null}
-                        onClick={() => void handleDeleteBot()}
-                        type="button"
-                        variant="destructive"
-                      >
-                        删除 Channel
-                      </Button>
-                    </div>
-                  </form>
                 </>
               ) : null}
 
@@ -851,6 +995,31 @@ export function BotFatherConsole({
           </Card>
         </div>
       </div>
+      <AlertDialog onOpenChange={setDeleteDialogOpen} open={deleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除 Channel？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedBotSlug
+                ? `删除 ${selectedBotSlug} 后，会同时移除 tenant 工作区和注册记录。这个操作不可撤销。`
+                : "这个操作不可撤销。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busyAction === "delete"}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busyAction === "delete"}
+              onClick={() => {
+                handleDeleteBot();
+              }}
+            >
+              {busyAction === "delete" ? "删除中..." : "确认删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
