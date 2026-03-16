@@ -814,8 +814,8 @@ export function BotFatherConsole({
               {selectedBot ? (
                 <>
                   <div className="rounded-2xl border bg-gradient-to-br from-muted/40 via-background to-background p-5">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="space-y-3">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0 space-y-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="font-semibold text-xl">
                             {selectedBot.display_name || selectedBot.bot_slug}
@@ -830,7 +830,7 @@ export function BotFatherConsole({
                           ) : null}
                         </div>
                         <div className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground text-sm">
-                          <span className="font-mono">
+                          <span className="break-all font-mono">
                             {selectedBot.bot_slug}
                           </span>
                           <span>Owner: {selectedBot.owner_open_id}</span>
@@ -847,7 +847,7 @@ export function BotFatherConsole({
                           </div>
                         )}
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[280px]">
                         <div className="rounded-xl border bg-background/80 p-3">
                           <div className="text-muted-foreground text-xs">
                             更新时间
@@ -868,7 +868,7 @@ export function BotFatherConsole({
                     </div>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">
                         自定义标识
@@ -902,12 +902,6 @@ export function BotFatherConsole({
                       </div>
                     </div>
                     <div className="rounded-xl border bg-background/80 p-4">
-                      <div className="text-muted-foreground text-xs">密钥</div>
-                      <div className="mt-1 font-medium">
-                        {selectedBot.app_secret_masked || "-"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border bg-background/80 p-4">
                       <div className="text-muted-foreground text-xs">状态</div>
                       <div className="mt-1">
                         <Badge variant={stateVariant(selectedBot.state)}>
@@ -915,134 +909,167 @@ export function BotFatherConsole({
                         </Badge>
                       </div>
                     </div>
-                    <div className="rounded-xl border bg-background/80 p-4 md:col-span-2 xl:col-span-2">
-                      <div className="text-muted-foreground text-xs">
-                        Workspace
-                      </div>
-                      <div className="mt-1 break-all font-medium text-sm">
-                        {selectedBot.workspace || "-"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border bg-background/80 p-4 md:col-span-2 xl:col-span-1">
-                      <div className="text-muted-foreground text-xs">
-                        Config
-                      </div>
-                      <div className="mt-1 break-all font-medium text-sm">
-                        {selectedBot.config_path || "-"}
-                      </div>
-                    </div>
                   </div>
 
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      <div className="rounded-xl border bg-background/80 p-4">
-                        <div className="space-y-1">
-                          <div className="font-medium text-sm">配置</div>
-                          <div className="text-muted-foreground text-xs">
-                            调整 channel 配置并刷新当前详情。
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <Button
-                            aria-disabled={selectedBotRunning}
-                            className={cn(
-                              selectedBotRunning
-                                ? "border-dashed border-muted-foreground/30 text-muted-foreground opacity-60 hover:bg-background hover:text-muted-foreground"
-                                : null
-                            )}
-                            disabled={busyAction !== null}
-                            onClick={handleEditRequest}
-                            type="button"
-                            variant="outline"
-                          >
-                            编辑配置
-                          </Button>
-                          <Button
-                            disabled={busyAction !== null}
-                            onClick={() => {
-                              refreshCurrentBot();
-                            }}
-                            type="button"
-                            variant="outline"
-                          >
-                            刷新详情
-                          </Button>
+                  <Collapsible
+                    className="rounded-xl border bg-background/70"
+                    defaultOpen={false}
+                  >
+                    <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-1">
+                        <div className="font-medium text-sm">更多技术信息</div>
+                        <div className="text-muted-foreground text-xs">
+                          密钥、工作区路径和配置文件等低频信息默认折叠，避免页面过满。
                         </div>
                       </div>
-
-                      <div className="rounded-xl border bg-background/80 p-4">
-                        <div className="space-y-1">
-                          <div className="font-medium text-sm">运行控制</div>
+                      <CollapsibleTrigger asChild>
+                        <Button size="sm" type="button" variant="outline">
+                          查看技术信息
+                        </Button>
+                      </CollapsibleTrigger>
+                    </div>
+                    <CollapsibleContent>
+                      <div className="grid gap-3 border-t px-4 pb-4 pt-4 md:grid-cols-2">
+                        <div className="rounded-xl border bg-background/80 p-4">
                           <div className="text-muted-foreground text-xs">
-                            查看运行状态，并执行启动或停止。
+                            密钥
+                          </div>
+                          <div className="mt-1 break-all font-mono text-sm">
+                            {selectedBot.app_secret_masked || "-"}
                           </div>
                         </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <Button
-                            disabled={busyAction !== null || selectedBotRunning}
-                            onClick={() => {
-                              handleBotAction("start");
-                            }}
-                            type="button"
-                            variant="default"
-                          >
-                            启动
-                          </Button>
-                          <Button
-                            disabled={
-                              busyAction !== null || !selectedBotRunning
-                            }
-                            onClick={() => {
-                              handleBotAction("stop");
-                            }}
-                            type="button"
-                            variant="outline"
-                          >
-                            停止
-                          </Button>
-                          <Button
-                            disabled={busyAction !== null}
-                            onClick={() => {
-                              handleBotAction("status");
-                            }}
-                            type="button"
-                            variant="outline"
-                          >
-                            状态
-                          </Button>
+                        <div className="rounded-xl border bg-background/80 p-4 md:col-span-2">
+                          <div className="text-muted-foreground text-xs">
+                            Workspace
+                          </div>
+                          <div className="mt-1 break-all font-mono text-sm">
+                            {selectedBot.workspace || "-"}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border bg-background/80 p-4 md:col-span-2">
+                          <div className="text-muted-foreground text-xs">
+                            Config
+                          </div>
+                          <div className="mt-1 break-all font-mono text-sm">
+                            {selectedBot.config_path || "-"}
+                          </div>
                         </div>
                       </div>
+                    </CollapsibleContent>
+                  </Collapsible>
 
-                      <div className="rounded-xl border bg-background/80 p-4">
-                        <div className="space-y-1">
-                          <div className="font-medium text-sm">诊断与维护</div>
-                          <div className="text-muted-foreground text-xs">
-                            诊断、重建并查看运行日志。
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="rounded-xl border bg-background/80 p-4">
+                      <div className="space-y-1">
+                        <div className="font-medium text-sm">配置</div>
+                        <div className="text-muted-foreground text-xs">
+                          调整 channel 配置并刷新当前详情。
+                        </div>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button
+                          aria-disabled={selectedBotRunning}
+                          className={cn(
+                            selectedBotRunning
+                              ? "border-dashed border-muted-foreground/30 text-muted-foreground opacity-60 hover:bg-background hover:text-muted-foreground"
+                              : null
+                          )}
+                          disabled={busyAction !== null}
+                          onClick={handleEditRequest}
+                          type="button"
+                          variant="outline"
+                        >
+                          编辑配置
+                        </Button>
+                        <Button
+                          disabled={busyAction !== null}
+                          onClick={() => {
+                            refreshCurrentBot();
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          刷新详情
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border bg-background/80 p-4">
+                      <div className="space-y-1">
+                        <div className="font-medium text-sm">运行控制</div>
+                        <div className="text-muted-foreground text-xs">
+                          查看运行状态，并执行启动或停止。
+                        </div>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button
+                          disabled={busyAction !== null || selectedBotRunning}
+                          onClick={() => {
+                            handleBotAction("start");
+                          }}
+                          type="button"
+                          variant="default"
+                        >
+                          启动
+                        </Button>
+                        <Button
+                          disabled={busyAction !== null || !selectedBotRunning}
+                          onClick={() => {
+                            handleBotAction("stop");
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          停止
+                        </Button>
+                        <Button
+                          disabled={busyAction !== null}
+                          onClick={() => {
+                            handleBotAction("status");
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          状态
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border bg-background/80 p-4 md:col-span-2">
+                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                        <div>
+                          <div className="space-y-1">
+                            <div className="font-medium text-sm">
+                              诊断与维护
+                            </div>
+                            <div className="text-muted-foreground text-xs">
+                              诊断、重建并查看运行日志。
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <Button
+                              disabled={busyAction !== null}
+                              onClick={() => {
+                                handleBotAction("doctor");
+                              }}
+                              type="button"
+                              variant="outline"
+                            >
+                              诊断
+                            </Button>
+                            <Button
+                              disabled={busyAction !== null}
+                              onClick={() => {
+                                handleBotAction("rebuild");
+                              }}
+                              type="button"
+                              variant="outline"
+                            >
+                              重建
+                            </Button>
                           </div>
                         </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <Button
-                            disabled={busyAction !== null}
-                            onClick={() => {
-                              handleBotAction("doctor");
-                            }}
-                            type="button"
-                            variant="outline"
-                          >
-                            诊断
-                          </Button>
-                          <Button
-                            disabled={busyAction !== null}
-                            onClick={() => {
-                              handleBotAction("rebuild");
-                            }}
-                            type="button"
-                            variant="outline"
-                          >
-                            重建
-                          </Button>
-                        </div>
-                        <div className="mt-4 grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)] sm:items-end">
+                        <div className="grid gap-2">
                           <div className="space-y-2">
                             <Label htmlFor="logLines">日志行数</Label>
                             <Input
@@ -1066,29 +1093,51 @@ export function BotFatherConsole({
                         </div>
                       </div>
                     </div>
+                  </div>
 
-                    <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+                  <Collapsible
+                    className="rounded-xl border border-destructive/30 bg-destructive/5"
+                    defaultOpen={false}
+                  >
+                    <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="space-y-1">
                         <div className="font-medium text-destructive text-sm">
                           危险操作
                         </div>
                         <div className="text-muted-foreground text-xs">
-                          删除 channel 后，会同时移除 tenant 工作区和注册记录。
+                          删除 channel 的操作默认折叠，避免误触和占用过多空间。
                         </div>
                       </div>
-                      <Button
-                        className="mt-4 w-full"
-                        disabled={busyAction !== null}
-                        onClick={() => {
-                          setDeleteDialogOpen(true);
-                        }}
-                        type="button"
-                        variant="destructive"
-                      >
-                        删除 Channel
-                      </Button>
+                      <CollapsibleTrigger asChild>
+                        <Button
+                          className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          size="sm"
+                          type="button"
+                          variant="outline"
+                        >
+                          显示危险操作
+                        </Button>
+                      </CollapsibleTrigger>
                     </div>
-                  </div>
+                    <CollapsibleContent>
+                      <div className="border-destructive/20 border-t px-4 pb-4 pt-4">
+                        <div className="mb-3 text-muted-foreground text-xs">
+                          删除 channel 后，会同时移除 tenant 工作区和注册记录。
+                        </div>
+                        <Button
+                          className="w-full sm:w-auto"
+                          disabled={busyAction !== null}
+                          onClick={() => {
+                            setDeleteDialogOpen(true);
+                          }}
+                          type="button"
+                          variant="destructive"
+                        >
+                          删除 Channel
+                        </Button>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </>
               ) : null}
 
