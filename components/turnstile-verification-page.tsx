@@ -112,10 +112,10 @@ export function TurnstileVerificationPage({
         <div className="absolute bottom-[-7rem] left-1/3 h-96 w-96 rounded-full bg-emerald-100/65 blur-3xl dark:bg-emerald-500/8" />
       </div>
 
-      <div className="relative mx-auto flex min-h-[calc(100dvh-2rem)] max-w-5xl items-center">
-        <div className="w-full overflow-hidden rounded-[2.25rem] border border-black/10 bg-white/82 shadow-[0_40px_120px_-55px_rgba(15,23,42,0.35)] backdrop-blur dark:border-white/10 dark:bg-[#111318]/84">
+      <div className="relative mx-auto flex min-h-[calc(100dvh-2rem)] max-w-5xl items-start lg:items-center">
+        <div className="w-full overflow-hidden rounded-[2rem] border border-black/10 bg-white/82 shadow-[0_40px_120px_-55px_rgba(15,23,42,0.35)] backdrop-blur dark:border-white/10 dark:bg-[#111318]/84 sm:rounded-[2.25rem]">
           <div className="grid lg:grid-cols-[340px_minmax(0,1fr)]">
-            <aside className="relative overflow-hidden bg-[#111318] px-6 py-7 text-white sm:px-8 sm:py-9">
+            <aside className="order-2 relative overflow-hidden bg-[#111318] px-5 py-6 text-white sm:px-8 sm:py-9 lg:order-1">
               <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.22),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(16,185,129,0.14),transparent_32%)]" />
               <div className="pointer-events-none absolute inset-y-0 right-0 w-px bg-white/10" />
 
@@ -125,11 +125,11 @@ export function TurnstileVerificationPage({
                   Secure Passage
                 </div>
 
-                <div className="mt-7 space-y-4">
+                <div className="mt-6 space-y-3 sm:mt-7 sm:space-y-4">
                   <p className="text-sm text-white/55">
                     Cloudflare Turnstile 校验
                   </p>
-                  <h1 className="text-balance font-semibold text-4xl tracking-tight text-white">
+                  <h1 className="text-balance font-semibold text-3xl tracking-tight text-white sm:text-4xl">
                     通过一次校验，
                     <br />
                     然后继续当前会话。
@@ -139,7 +139,7 @@ export function TurnstileVerificationPage({
                   </p>
                 </div>
 
-                <div className="mt-8 space-y-3">
+                <div className="mt-8 hidden space-y-3 lg:block">
                   {CHECKPOINT_ITEMS.map((item, index) => (
                     <div
                       className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] px-4 py-3"
@@ -162,7 +162,7 @@ export function TurnstileVerificationPage({
                   ))}
                 </div>
 
-                <div className="mt-8 rounded-[1.6rem] border border-white/10 bg-white/[0.045] p-4">
+                <div className="mt-6 rounded-[1.45rem] border border-white/10 bg-white/[0.045] p-4 lg:mt-8 lg:rounded-[1.6rem]">
                   <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.28em] text-white/52">
                     <ArrowRight className="size-3.5" />
                     返回目的地
@@ -177,8 +177,8 @@ export function TurnstileVerificationPage({
               </div>
             </aside>
 
-            <section className="relative bg-[linear-gradient(180deg,rgba(255,255,255,0.68),rgba(249,245,238,0.92))] px-4 py-5 sm:px-6 sm:py-6 dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))]">
-              <div className="rounded-[1.9rem] border border-black/10 bg-white/74 p-5 shadow-[0_25px_80px_-60px_rgba(15,23,42,0.45)] dark:border-white/10 dark:bg-black/18 sm:p-7">
+            <section className="order-1 relative bg-[linear-gradient(180deg,rgba(255,255,255,0.68),rgba(249,245,238,0.92))] px-4 py-4 sm:px-6 sm:py-6 dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] lg:order-2">
+              <div className="rounded-[1.65rem] border border-black/10 bg-white/74 p-4 shadow-[0_25px_80px_-60px_rgba(15,23,42,0.45)] dark:border-white/10 dark:bg-black/18 sm:rounded-[1.9rem] sm:p-7">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-2">
                     <div className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black/[0.03] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-black/55 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/50">
@@ -186,7 +186,7 @@ export function TurnstileVerificationPage({
                       Cloudflare Verification
                     </div>
                     <div>
-                      <h2 className="font-semibold text-3xl tracking-tight text-zinc-950 dark:text-white">
+                      <h2 className="font-semibold text-2xl tracking-tight text-zinc-950 dark:text-white sm:text-3xl">
                         安全校验
                       </h2>
                       <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600 dark:text-zinc-300">
@@ -207,7 +207,7 @@ export function TurnstileVerificationPage({
                   </div>
                 </div>
 
-                <div className="mt-7 overflow-hidden rounded-[1.75rem] border border-black/10 bg-[#f7f1e7] p-4 dark:border-white/10 dark:bg-[#0e1014] sm:p-5">
+                <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-black/10 bg-[#f7f1e7] p-3 dark:border-white/10 dark:bg-[#0e1014] sm:mt-7 sm:rounded-[1.75rem] sm:p-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="font-medium text-sm text-zinc-950 dark:text-white">
@@ -223,7 +223,7 @@ export function TurnstileVerificationPage({
                   </div>
 
                   {verificationState === "verified" ? (
-                    <div className="mt-6 flex min-h-[220px] flex-col items-center justify-center rounded-[1.5rem] border border-emerald-500/18 bg-white/70 px-4 py-8 text-center dark:bg-black/15">
+                    <div className="mt-4 flex min-h-[220px] flex-col items-center justify-center rounded-[1.3rem] border border-emerald-500/18 bg-white/70 px-4 py-8 text-center dark:bg-black/15 sm:mt-6 sm:rounded-[1.5rem]">
                       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/12 text-emerald-600 dark:text-emerald-300">
                         <CheckCheck className="size-8" />
                       </div>
@@ -243,8 +243,8 @@ export function TurnstileVerificationPage({
                       </Button>
                     </div>
                   ) : (
-                    <div className="mt-6 space-y-4">
-                      <div className="rounded-[1.45rem] border border-black/10 bg-white/72 p-3 shadow-sm dark:border-white/10 dark:bg-black/18">
+                    <div className="mt-4 space-y-4 sm:mt-6">
+                      <div className="rounded-[1.3rem] border border-black/10 bg-white/72 p-2.5 shadow-sm dark:border-white/10 dark:bg-black/18 sm:rounded-[1.45rem] sm:p-3">
                         <div className="overflow-x-auto pb-1">
                           <div className="mx-auto max-w-[420px] min-w-[300px] rounded-[1.25rem] border border-black/10 bg-white p-1.5 shadow-[0_16px_40px_-28px_rgba(15,23,42,0.45)] dark:border-white/10 dark:bg-[#12141a]">
                             <TurnstileWidget
@@ -263,7 +263,7 @@ export function TurnstileVerificationPage({
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.3rem] border border-black/10 bg-black/[0.025] px-4 py-3 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-300">
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.2rem] border border-black/10 bg-black/[0.025] px-4 py-3 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-300 sm:rounded-[1.3rem]">
                         <span>仅首次进入或验证失效时需要完成一次。</span>
                         {verificationState === "error" ? (
                           <Button
