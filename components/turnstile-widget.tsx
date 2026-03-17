@@ -69,10 +69,12 @@ export function TurnstileWidget({
   siteKey,
   onVerifiedChange = noop,
   action,
+  className,
 }: {
   siteKey: string;
   onVerifiedChange?: (verified: boolean) => void;
   action?: string;
+  className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
@@ -108,5 +110,5 @@ export function TurnstileWidget({
     };
   }, [action, onVerifiedChange, siteKey]);
 
-  return <div ref={containerRef} />;
+  return <div className={className} ref={containerRef} />;
 }

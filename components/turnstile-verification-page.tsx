@@ -242,9 +242,10 @@ export function TurnstileVerificationPage({
                         </div>
                       </div>
 
-                      <div className="flex min-h-[110px] items-center justify-center rounded-[1.1rem] border border-black/10 bg-white px-3 py-4 dark:border-white/10 dark:bg-[#0d0e11]">
+                      <div className="mx-auto w-fit max-w-full rounded-[1.1rem] border border-black/10 bg-white p-2 shadow-sm dark:border-white/10 dark:bg-[#0d0e11]">
                         <TurnstileWidget
                           action="chat"
+                          className="h-[65px] w-[300px] overflow-hidden rounded-[0.8rem]"
                           key={widgetKey}
                           onVerifiedChange={(verified) => {
                             setVerificationState(
