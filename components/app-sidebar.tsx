@@ -31,7 +31,6 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -154,38 +153,18 @@ export function AppSidebar({
                     onOpenChange={setIsChatMenuOpen}
                     open={isChatMenuOpen}
                   >
-                    <SidebarMenuButton
-                      asChild
-                      isActive={isChatRoute}
-                      tooltip="Chat"
-                    >
-                      <Link
-                        href="/chat/new"
-                        onClick={() => {
-                          setOpenMobile(false);
-                        }}
-                      >
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton isActive={isChatRoute} tooltip="Chat">
                         <HomeIcon size={16} />
                         <span>Chat</span>
-                      </Link>
-                    </SidebarMenuButton>
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuAction
-                        aria-label="Toggle chat menu"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }}
-                        showOnHover={false}
-                      >
                         <span
-                          className={`transition-transform ${
+                          className={`ml-auto transition-transform ${
                             isChatMenuOpen ? "rotate-180" : ""
                           }`}
                         >
                           <ChevronDownIcon size={14} />
                         </span>
-                      </SidebarMenuAction>
+                      </SidebarMenuButton>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <SidebarMenuSub>
