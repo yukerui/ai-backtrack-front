@@ -10,6 +10,7 @@ declare global {
         options: {
           sitekey: string;
           action?: string;
+          size?: "normal" | "compact" | "flexible";
           callback?: (token: string) => void;
           "expired-callback"?: () => void;
           "error-callback"?: () => void;
@@ -70,11 +71,13 @@ export function TurnstileWidget({
   onVerifiedChange = noop,
   action,
   className,
+  size,
 }: {
   siteKey: string;
   onVerifiedChange?: (verified: boolean) => void;
   action?: string;
   className?: string;
+  size?: "normal" | "compact" | "flexible";
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
@@ -92,6 +95,7 @@ export function TurnstileWidget({
         widgetIdRef.current = window.turnstile.render(containerRef.current, {
           sitekey: siteKey,
           action,
+          size,
           callback: (token) => onVerifiedChange(Boolean(token)),
           "expired-callback": () => onVerifiedChange(false),
           "error-callback": () => onVerifiedChange(false),
@@ -108,7 +112,7 @@ export function TurnstileWidget({
       }
       widgetIdRef.current = null;
     };
-  }, [action, onVerifiedChange, siteKey]);
+  }, [action, onVerifiedChange, siteKey, size]);
 
   return <div className={className} ref={containerRef} />;
 }
