@@ -869,16 +869,27 @@ export function BotFatherConsole({
                         </pre>
                       </CollapsibleContent>
                     </Collapsible>
-                    <div className="rounded-2xl border bg-background/80 p-4">
-                      <ol
-                        className="list-decimal space-y-2 pl-5 text-foreground text-sm leading-6"
-                        start={5}
-                      >
-                        <li>在“添加应用能力”里启用 Bot。</li>
-                        <li>在“事件与回调”里选择长连接。</li>
-                        <li>添加事件 `im.message.receive_v1`。</li>
-                        <li>最后在“版本管理与发布”里创建版本并发布。</li>
-                      </ol>
+                    <div className="space-y-3">
+                      <StepCard
+                        description="在“添加应用能力”里启用 Bot，应用才具备机器人收发消息能力。"
+                        step={5}
+                        title="启用 Bot 能力"
+                      />
+                      <StepCard
+                        description="进入“事件与回调”后选择长连接，后续消息事件会通过长连接接入。"
+                        step={6}
+                        title="选择长连接"
+                      />
+                      <StepCard
+                        description="添加事件 `im.message.receive_v1`，用于接收用户发送给 Bot 的消息。"
+                        step={7}
+                        title="添加消息事件"
+                      />
+                      <StepCard
+                        description="最后在“版本管理与发布”里创建版本并发布；未发布前 Bot 不会响应。"
+                        step={8}
+                        title="创建并发布版本"
+                      />
                     </div>
                   </div>
                 </StepCard>
