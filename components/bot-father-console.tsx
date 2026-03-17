@@ -9,7 +9,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import useSWR from "swr";
-import { Response } from "@/components/elements/response";
+import { GroupJoinBanner } from "@/components/group-join-banner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -150,9 +150,6 @@ const FEISHU_PERMISSION_IMPORT_JSON = `{
     "user": []
   }
 }`;
-
-const FEISHU_ORG_JOIN_MARKDOWN =
-  "**[快点击加入吧！](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=158v3e28-d8fb-40fd-94bd-e8762d48d5e8)**";
 
 function SummaryCard({
   label,
@@ -737,39 +734,44 @@ export function BotFatherConsole({
 
   return (
     <div className="flex h-full flex-col gap-6 p-4 md:p-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="flex items-start gap-3">
-          <SidebarToggle className="mt-1 shrink-0" />
-          <div className="space-y-2">
-            <h1 className="font-semibold text-2xl tracking-tight">Channels</h1>
-            <p className="max-w-3xl text-muted-foreground text-sm">
-              {isAdmin
-                ? `已登录管理员：${currentUserEmail}`
-                : `当前登录账号：${currentUserEmail}`}
-            </p>
+      <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 py-4 backdrop-blur md:-mx-6 md:px-6">
+        <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-end">
+          <div className="flex items-start gap-3">
+            <SidebarToggle className="mt-1 shrink-0" />
+            <div className="space-y-2">
+              <h1 className="font-semibold text-2xl tracking-tight">
+                Channels
+              </h1>
+              <p className="max-w-3xl text-muted-foreground text-sm">
+                {isAdmin
+                  ? `已登录管理员：${currentUserEmail}`
+                  : `当前登录账号：${currentUserEmail}`}
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={() => {
-              resetCreateBotForm();
-              setViewMode("onboard");
-            }}
-            type="button"
-            variant={activeViewMode === "onboard" ? "default" : "outline"}
-          >
-            接入新 Channel
-          </Button>
-          <Button
-            disabled={!hasBots}
-            onClick={() => {
-              setViewMode("manage");
-            }}
-            type="button"
-            variant={activeViewMode === "manage" ? "default" : "outline"}
-          >
-            管理已有 Channel
-          </Button>
+          <GroupJoinBanner className="lg:justify-self-center" />
+          <div className="flex flex-wrap gap-2 lg:justify-self-end">
+            <Button
+              onClick={() => {
+                resetCreateBotForm();
+                setViewMode("onboard");
+              }}
+              type="button"
+              variant={activeViewMode === "onboard" ? "default" : "outline"}
+            >
+              接入新 Channel
+            </Button>
+            <Button
+              disabled={!hasBots}
+              onClick={() => {
+                setViewMode("manage");
+              }}
+              type="button"
+              variant={activeViewMode === "manage" ? "default" : "outline"}
+            >
+              管理已有 Channel
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -796,17 +798,10 @@ export function BotFatherConsole({
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="space-y-1">
-                    <CardTitle>4 步完成接入</CardTitle>
-                    <CardDescription>
-                      按顺序完成飞书配置后，在右侧填写信息创建 Channel。
-                    </CardDescription>
-                  </div>
-                  <Response className="max-w-sm text-red-600 text-sm [&_a]:font-medium [&_a]:text-red-600 [&_a]:underline [&_a]:underline-offset-4">
-                    {FEISHU_ORG_JOIN_MARKDOWN}
-                  </Response>
-                </div>
+                <CardTitle>4 步完成接入</CardTitle>
+                <CardDescription>
+                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <StepCard
