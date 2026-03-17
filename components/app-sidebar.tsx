@@ -178,12 +178,13 @@ export function AppSidebar({
                         }}
                         showOnHover={false}
                       >
-                        <ChevronDownIcon
+                        <span
                           className={`transition-transform ${
                             isChatMenuOpen ? "rotate-180" : ""
                           }`}
-                          size={14}
-                        />
+                        >
+                          <ChevronDownIcon size={14} />
+                        </span>
                       </SidebarMenuAction>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
