@@ -798,7 +798,7 @@ export function BotFatherConsole({
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>4 步完成接入</CardTitle>
+                <CardTitle>8 步完成接入</CardTitle>
                 <CardDescription>
                   按顺序完成飞书配置后，在右侧填写信息创建 Channel。
                 </CardDescription>
@@ -838,61 +838,57 @@ export function BotFatherConsole({
                   </a>
                 </StepCard>
                 <StepCard
-                  description="把权限、Bot 能力、长连接和消息事件一次配置好，后面就能稳定收发消息。"
+                  description="在“权限管理 -&gt; 批量导入/导出权限 -&gt; 导入权限”里粘贴 JSON，先把必需权限一次导入。"
                   step={4}
-                  title="配置权限与事件"
+                  title="导入权限"
                 >
-                  <div className="space-y-3">
-                    <Collapsible
-                      className="rounded-xl border bg-muted/30"
-                      defaultOpen={false}
-                    >
-                      <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="space-y-1">
-                          <p className="font-medium text-foreground text-sm">
-                            权限导入 JSON
-                          </p>
-                          <p className="text-muted-foreground text-xs">
-                            在“权限管理 -&gt; 批量导入/导出权限 -&gt;
-                            导入权限”里直接粘贴。
-                          </p>
-                        </div>
-                        <CollapsibleTrigger asChild>
-                          <Button size="sm" type="button" variant="outline">
-                            查看 JSON
-                          </Button>
-                        </CollapsibleTrigger>
+                  <Collapsible
+                    className="rounded-xl border bg-muted/30"
+                    defaultOpen={false}
+                  >
+                    <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-1">
+                        <p className="font-medium text-foreground text-sm">
+                          权限导入 JSON
+                        </p>
+                        <p className="text-muted-foreground text-xs">
+                          在“权限管理 -&gt; 批量导入/导出权限 -&gt;
+                          导入权限”里直接粘贴。
+                        </p>
                       </div>
-                      <CollapsibleContent>
-                        <pre className="mx-3 mb-3 overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs text-foreground">
-                          {FEISHU_PERMISSION_IMPORT_JSON}
-                        </pre>
-                      </CollapsibleContent>
-                    </Collapsible>
-                    <div className="space-y-3">
-                      <StepCard
-                        description="在“添加应用能力”里启用 Bot，应用才具备机器人收发消息能力。"
-                        step={5}
-                        title="启用 Bot 能力"
-                      />
-                      <StepCard
-                        description="进入“事件与回调”后选择长连接，后续消息事件会通过长连接接入。"
-                        step={6}
-                        title="选择长连接"
-                      />
-                      <StepCard
-                        description="添加事件 `im.message.receive_v1`，用于接收用户发送给 Bot 的消息。"
-                        step={7}
-                        title="添加消息事件"
-                      />
-                      <StepCard
-                        description="最后在“版本管理与发布”里创建版本并发布；未发布前 Bot 不会响应。"
-                        step={8}
-                        title="创建并发布版本"
-                      />
+                      <CollapsibleTrigger asChild>
+                        <Button size="sm" type="button" variant="outline">
+                          查看 JSON
+                        </Button>
+                      </CollapsibleTrigger>
                     </div>
-                  </div>
+                    <CollapsibleContent>
+                      <pre className="mx-3 mb-3 overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs text-foreground">
+                        {FEISHU_PERMISSION_IMPORT_JSON}
+                      </pre>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </StepCard>
+                <StepCard
+                  description="在“添加应用能力”里启用 Bot，应用才具备机器人收发消息能力。"
+                  step={5}
+                  title="启用 Bot 能力"
+                />
+                <StepCard
+                  description="进入“事件与回调”后选择长连接，后续消息事件会通过长连接接入。"
+                  step={6}
+                  title="选择长连接"
+                />
+                <StepCard
+                  description="添加事件 `im.message.receive_v1`，用于接收用户发送给 Bot 的消息。"
+                  step={7}
+                  title="添加消息事件"
+                />
+                <StepCard
+                  description="最后在“版本管理与发布”里创建版本并发布；未发布前 Bot 不会响应。"
+                  step={8}
+                  title="创建并发布版本"
+                />
               </CardContent>
             </Card>
           </div>
