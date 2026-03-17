@@ -25,12 +25,11 @@ const payloadSchema = z.object({
         url: z.string().url(),
         mediaType: z.string().min(1).max(120),
       })
-    )
+  )
     .max(20)
     .optional(),
   model: z.string().optional(),
   isNewChat: z.boolean().optional(),
-  turnstileToken: z.string().optional(),
   policyPrechecked: z.boolean().optional(),
 });
 
@@ -353,7 +352,6 @@ export const fundChatTask = schemaTask({
       attachments,
       model,
       isNewChat,
-      turnstileToken,
       policyPrechecked,
     },
     { signal }
@@ -365,7 +363,6 @@ export const fundChatTask = schemaTask({
       model: model || "gpt-5.3-codex",
       attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
       isNewChat: Boolean(isNewChat),
-      hasTurnstileToken: Boolean(turnstileToken?.trim()),
       policyPrechecked: Boolean(policyPrechecked),
     });
     const base = process.env.CLAUDE_CODE_API_BASE
@@ -386,11 +383,6 @@ export const fundChatTask = schemaTask({
       "x-chat-new": isNewChat ? "true" : "false",
       "x-user-type": userType === "guest" ? "guest" : "regular",
     };
-    if (turnstileToken?.trim()) {
-      const token = turnstileToken.trim();
-      headers["x-turnstile-token"] = token;
-      headers["cf-turnstile-response"] = token;
-    }
     if (policyPrechecked) {
       headers["x-policy-prechecked"] = "1";
     }

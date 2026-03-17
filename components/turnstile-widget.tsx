@@ -15,13 +15,13 @@ declare global {
           "error-callback"?: () => void;
         }
       ) => string;
-      reset?: (widgetId: string) => void;
       remove?: (widgetId: string) => void;
     };
   }
 }
 
 let turnstileScriptPromise: Promise<void> | null = null;
+const noop = (_verified: boolean) => undefined;
 
 function loadTurnstileScript(): Promise<void> {
   if (typeof window === "undefined") {
@@ -42,14 +42,19 @@ function loadTurnstileScript(): Promise<void> {
     );
     if (existing) {
       existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error("Failed to load Turnstile script")), {
-        once: true,
-      });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("Failed to load Turnstile script")),
+        {
+          once: true,
+        }
+      );
       return;
     }
 
     const script = document.createElement("script");
-    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.src =
+      "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
     script.async = true;
     script.defer = true;
     script.onload = () => resolve();
@@ -62,14 +67,12 @@ function loadTurnstileScript(): Promise<void> {
 
 export function TurnstileWidget({
   siteKey,
-  onTokenChange,
+  onVerifiedChange = noop,
   action,
-  resetNonce,
 }: {
   siteKey: string;
-  onTokenChange: (token: string) => void;
+  onVerifiedChange?: (verified: boolean) => void;
   action?: string;
-  resetNonce?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
@@ -87,12 +90,12 @@ export function TurnstileWidget({
         widgetIdRef.current = window.turnstile.render(containerRef.current, {
           sitekey: siteKey,
           action,
-          callback: (token) => onTokenChange(token || ""),
-          "expired-callback": () => onTokenChange(""),
-          "error-callback": () => onTokenChange(""),
+          callback: (token) => onVerifiedChange(Boolean(token)),
+          "expired-callback": () => onVerifiedChange(false),
+          "error-callback": () => onVerifiedChange(false),
         });
       } catch {
-        onTokenChange("");
+        onVerifiedChange(false);
       }
     })();
 
@@ -103,15 +106,7 @@ export function TurnstileWidget({
       }
       widgetIdRef.current = null;
     };
-  }, [action, onTokenChange, siteKey]);
-
-  useEffect(() => {
-    if (!widgetIdRef.current || !window.turnstile?.reset) {
-      return;
-    }
-    window.turnstile.reset(widgetIdRef.current);
-    onTokenChange("");
-  }, [onTokenChange, resetNonce]);
+  }, [action, onVerifiedChange, siteKey]);
 
   return <div ref={containerRef} />;
 }

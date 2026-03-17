@@ -47,13 +47,6 @@ export function getLanguageModel(modelId: string) {
   return gateway.languageModel(modelId);
 }
 
-export function getTitleModel() {
-  if (isTestEnvironment && myProvider) {
-    return myProvider.languageModel("title-model");
-  }
-  return gateway.languageModel("google/gemini-2.5-flash-lite");
-}
-
 export function getArtifactModel() {
   if (isTestEnvironment && myProvider) {
     return myProvider.languageModel("artifact-model");

@@ -23,6 +23,10 @@ import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError, getClientErrorMessage } from "@/lib/errors";
 import {
+  readRealtimeRunStream as readRealtimeRunStreamWithAuth,
+  subscribeRealtimeRunStatus as subscribeRealtimeRunStatusWithAuth,
+} from "@/lib/realtime-client";
+import {
   buildRealtimeTokenLogMeta,
   buildRealtimeTokenLogMetaSync,
   normalizeRealtimeApiHost,
@@ -30,14 +34,11 @@ import {
   validateRealtimeTokenRunScope,
 } from "@/lib/realtime-log";
 import {
-  readRealtimeRunStream as readRealtimeRunStreamWithAuth,
-  subscribeRealtimeRunStatus as subscribeRealtimeRunStatusWithAuth,
-} from "@/lib/realtime-client";
-import {
   decideTaskRecovery,
   shouldRefreshRealtimeTokenOnError,
   shouldRetryRealtimeStreamError,
 } from "@/lib/task-recovery";
+import { buildTurnstileVerificationPath } from "@/lib/turnstile";
 import type {
   Attachment,
   BacktestArtifactItem,
@@ -75,9 +76,10 @@ const SUMMARY_SHELL_TOKEN_REGEX =
   /(?:\|\||&&|;|\||`|\$\(|\$\{|\b--[a-z0-9_-]+\b|<<<?|>>>?)/i;
 const SUMMARY_PATH_REGEX = /(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]*/;
 const CJK_REGEX = /[\u3400-\u9fff]/;
-
 function mapReasoningTitleFromItemType(itemType: string) {
-  const normalized = String(itemType || "").toLowerCase().trim();
+  const normalized = String(itemType || "")
+    .toLowerCase()
+    .trim();
   if (normalized === "command_execution") {
     return "执行 shell 命令";
   }
@@ -312,13 +314,17 @@ function normalizePlotlyCharts(value: unknown): PlotlyChartPayload[] {
   return normalized;
 }
 
-function normalizeThinkingActivity(value: unknown): ThinkingActivityPayload | null {
+function normalizeThinkingActivity(
+  value: unknown
+): ThinkingActivityPayload | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   const candidate = value as Partial<ThinkingActivityPayload>;
   const reasoningId =
-    typeof candidate.reasoningId === "string" ? candidate.reasoningId.trim() : "";
+    typeof candidate.reasoningId === "string"
+      ? candidate.reasoningId.trim()
+      : "";
   const kind = typeof candidate.kind === "string" ? candidate.kind.trim() : "";
   const label =
     typeof candidate.label === "string" ? candidate.label.trim() : "";
@@ -517,9 +523,7 @@ function extractThinkingSummaryText(message: ChatMessage) {
     }
     const data = (part as { data?: { text?: unknown } }).data;
     const text =
-      typeof data?.text === "string"
-        ? sanitizeReasoningSummary(data.text)
-        : "";
+      typeof data?.text === "string" ? sanitizeReasoningSummary(data.text) : "";
     if (text) {
       return text;
     }
@@ -1231,7 +1235,9 @@ export function Chat({
           if (response.status === 403 || response.status === 401) {
             let forbiddenCause = "";
             try {
-              const errorPayload = (await response.json()) as { cause?: unknown };
+              const errorPayload = (await response.json()) as {
+                cause?: unknown;
+              };
               if (typeof errorPayload.cause === "string") {
                 forbiddenCause = errorPayload.cause.trim();
               }
@@ -1283,7 +1289,9 @@ export function Chat({
         const pollEvents = normalizeTaskPollEvents(payload.events);
         if (pollEvents.length === 0) {
           const reasoningDelta =
-            typeof payload.reasoningText === "string" ? payload.reasoningText : "";
+            typeof payload.reasoningText === "string"
+              ? payload.reasoningText
+              : "";
           const reasoningSummaryDelta =
             typeof payload.reasoningTitle === "string"
               ? sanitizeReasoningSummary(payload.reasoningTitle)
@@ -1311,7 +1319,12 @@ export function Chat({
         }
 
         if (pollEvents.length > 0 || payload.isCompleted) {
-          applyTaskEventsToMessage(runId, messageId, pollEvents, payload.isCompleted);
+          applyTaskEventsToMessage(
+            runId,
+            messageId,
+            pollEvents,
+            payload.isCompleted
+          );
         }
 
         if (payload.isCompleted) {
@@ -1321,7 +1334,11 @@ export function Chat({
         }
 
         if (payload.isFailed) {
-          replaceTaskMessageText(runId, messageId, `任务执行失败：${payload.status}`);
+          replaceTaskMessageText(
+            runId,
+            messageId,
+            `任务执行失败：${payload.status}`
+          );
           stopPollingRun(runId);
           return;
         }
@@ -1467,7 +1484,10 @@ export function Chat({
       applyTaskEventsToMessage(runId, messageId, completionEvents, true);
       mutate(unstable_serialize(getChatHistoryPaginationKey));
     } catch (error) {
-      console.error(`[chat-ui] Task completion sync failed for ${runId}:`, error);
+      console.error(
+        `[chat-ui] Task completion sync failed for ${runId}:`,
+        error
+      );
       applyTaskEventsToMessage(runId, messageId, [], true);
       setRealtimeIssue({
         runId,
@@ -1555,7 +1575,9 @@ export function Chat({
             cache: "no-store",
           });
           if (!response.ok) {
-            throw new Error(`Realtime token refresh failed (${response.status})`);
+            throw new Error(
+              `Realtime token refresh failed (${response.status})`
+            );
           }
           const payload =
             (await response.json()) as TaskRealtimeTokenRefreshResponse;
@@ -1685,7 +1707,10 @@ export function Chat({
             const refreshed = await refreshRealtimeToken();
             if (refreshed && realtimeRunIdsRef.current.has(runId)) {
               await new Promise<void>((resolve) => {
-                window.setTimeout(resolve, REALTIME_TOKEN_REFRESH_RETRY_DELAY_MS);
+                window.setTimeout(
+                  resolve,
+                  REALTIME_TOKEN_REFRESH_RETRY_DELAY_MS
+                );
               });
               continue;
             }
@@ -1696,7 +1721,10 @@ export function Chat({
             });
             continue;
           }
-          console.error(`[chat-ui] Realtime stream failed for ${runId}:`, error);
+          console.error(
+            `[chat-ui] Realtime stream failed for ${runId}:`,
+            error
+          );
           const decision = decideTaskRecovery({
             reason: "realtime_stream_error",
             hasCursorSig: Boolean(taskMeta.cursorSig),
@@ -1704,7 +1732,12 @@ export function Chat({
           setRealtimeIssue({ runId, message: decision.issueMessage });
           stopRealtimeRun(runId);
           if (decision.shouldStartPolling) {
-            startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
+            startPollingRun(
+              runId,
+              messageId,
+              taskMeta.cursor,
+              taskMeta.cursorSig
+            );
           }
           return;
         }
@@ -1713,9 +1746,9 @@ export function Chat({
 
     const watchRunStatus = async () => {
       while (!unmountedRef.current && realtimeRunIdsRef.current.has(runId)) {
-        let subscription:
-          | Awaited<ReturnType<typeof subscribeRealtimeRunStatusWithAuth>>
-          | null = null;
+        let subscription: Awaited<
+          ReturnType<typeof subscribeRealtimeRunStatusWithAuth>
+        > | null = null;
         try {
           subscription = await subscribeRealtimeRunStatusWithAuth({
             runId,
@@ -1728,7 +1761,11 @@ export function Chat({
               return;
             }
             if (run.isFailed) {
-              replaceTaskMessageText(runId, messageId, `任务执行失败：${run.status}`);
+              replaceTaskMessageText(
+                runId,
+                messageId,
+                `任务执行失败：${run.status}`
+              );
               setRealtimeIssue({
                 runId,
                 message: `实时任务失败：${run.status}。可点击“手动补拉”确认最终状态。`,
@@ -1755,12 +1792,18 @@ export function Chat({
             const refreshed = await refreshRealtimeToken();
             if (refreshed && realtimeRunIdsRef.current.has(runId)) {
               await new Promise<void>((resolve) => {
-                window.setTimeout(resolve, REALTIME_TOKEN_REFRESH_RETRY_DELAY_MS);
+                window.setTimeout(
+                  resolve,
+                  REALTIME_TOKEN_REFRESH_RETRY_DELAY_MS
+                );
               });
               continue;
             }
           }
-          console.error(`[chat-ui] Realtime status failed for ${runId}:`, error);
+          console.error(
+            `[chat-ui] Realtime status failed for ${runId}:`,
+            error
+          );
           const decision = decideTaskRecovery({
             reason: "realtime_status_error",
             hasCursorSig: Boolean(taskMeta.cursorSig),
@@ -1768,7 +1811,12 @@ export function Chat({
           setRealtimeIssue({ runId, message: decision.issueMessage });
           stopRealtimeRun(runId);
           if (decision.shouldStartPolling) {
-            startPollingRun(runId, messageId, taskMeta.cursor, taskMeta.cursorSig);
+            startPollingRun(
+              runId,
+              messageId,
+              taskMeta.cursor,
+              taskMeta.cursorSig
+            );
           }
           return;
         } finally {
@@ -1785,10 +1833,16 @@ export function Chat({
     };
 
     consumeRealtimeStream().catch((error) => {
-      console.error(`[chat-ui] Realtime stream setup failed for ${runId}:`, error);
+      console.error(
+        `[chat-ui] Realtime stream setup failed for ${runId}:`,
+        error
+      );
     });
     watchRunStatus().catch((error) => {
-      console.error(`[chat-ui] Realtime status setup failed for ${runId}:`, error);
+      console.error(
+        `[chat-ui] Realtime status setup failed for ${runId}:`,
+        error
+      );
     });
   };
 
@@ -1875,6 +1929,14 @@ export function Chat({
       startRealtimeRun(taskMeta, message.id);
     },
     onError: (error) => {
+      if (
+        error instanceof ChatSDKError &&
+        error.cause === "cloudflare_preclearance_required"
+      ) {
+        const redirectPath = `${window.location.pathname}${window.location.search}`;
+        window.location.replace(buildTurnstileVerificationPath(redirectPath));
+        return;
+      }
       const message = getClientErrorMessage(error);
       if (message.includes("AI Gateway requires a valid credit card")) {
         setShowCreditCardAlert(true);
@@ -1956,12 +2018,7 @@ export function Chat({
       setHasAppendedQuery(true);
       window.history.replaceState({}, "", `/chat/${id}`);
     }
-  }, [
-    query,
-    sendMessage,
-    hasAppendedQuery,
-    id,
-  ]);
+  }, [query, sendMessage, hasAppendedQuery, id]);
 
   useEffect(() => {
     hasRecoveredWatchdogRef.current = false;
@@ -2005,7 +2062,10 @@ export function Chat({
       );
       stopAllPollingRuns(pendingTaskFromMessage.runId);
       stopAllRealtimeRuns(pendingTaskFromMessage.runId);
-      startRealtimeRun(pendingTaskFromMessage, pendingTaskFromMessage.messageId);
+      startRealtimeRun(
+        pendingTaskFromMessage,
+        pendingTaskFromMessage.messageId
+      );
       return;
     }
 

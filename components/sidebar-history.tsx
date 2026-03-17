@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { SidebarMenu, useSidebar } from "@/components/ui/sidebar";
 import type { Chat } from "@/lib/db/schema";
+import { getClientErrorMessage } from "@/lib/errors";
+import { getChatHistoryState } from "@/lib/history-sidebar";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
@@ -37,6 +39,7 @@ export type ChatHistory = {
 };
 
 const PAGE_SIZE = 20;
+const CHAT_HISTORY_KEY_PREFIX = "/api/history?history_user=";
 
 const groupChatsByDate = (chats: Chat[]): GroupedChats => {
   const now = new Date();
@@ -73,14 +76,19 @@ const groupChatsByDate = (chats: Chat[]): GroupedChats => {
 
 export function getChatHistoryPaginationKey(
   pageIndex: number,
-  previousPageData: ChatHistory
+  previousPageData: ChatHistory,
+  userId?: string
 ) {
+  if (!userId) {
+    return null;
+  }
+
   if (previousPageData && previousPageData.hasMore === false) {
     return null;
   }
 
   if (pageIndex === 0) {
-    return `/api/history?limit=${PAGE_SIZE}`;
+    return `/api/history?history_user=${userId}&limit=${PAGE_SIZE}`;
   }
 
   const firstChatFromPage = previousPageData.chats.at(-1);
@@ -89,13 +97,18 @@ export function getChatHistoryPaginationKey(
     return null;
   }
 
-  return `/api/history?ending_before=${firstChatFromPage.id}&limit=${PAGE_SIZE}`;
+  return `/api/history?history_user=${userId}&ending_before=${firstChatFromPage.id}&limit=${PAGE_SIZE}`;
+}
+
+export function isChatHistoryCacheKey(key: unknown) {
+  return typeof key === "string" && key.startsWith(CHAT_HISTORY_KEY_PREFIX);
 }
 
 export function SidebarHistory({ user }: { user: User | undefined }) {
   const { setOpenMobile } = useSidebar();
   const pathname = usePathname();
   const id = pathname?.startsWith("/chat/") ? pathname.split("/")[2] : null;
+  const userId = user?.id;
 
   const {
     data: paginatedChatHistories,
@@ -103,9 +116,12 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     isValidating,
     isLoading,
     mutate,
-  } = useSWRInfinite<ChatHistory>(getChatHistoryPaginationKey, fetcher, {
-    fallbackData: [],
-  });
+    error,
+  } = useSWRInfinite<ChatHistory>(
+    (pageIndex, previousPageData) =>
+      getChatHistoryPaginationKey(pageIndex, previousPageData, userId),
+    fetcher
+  );
 
   const router = useRouter();
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -115,9 +131,12 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     ? paginatedChatHistories.some((page) => page.hasMore === false)
     : false;
 
-  const hasEmptyChatHistory = paginatedChatHistories
-    ? paginatedChatHistories.every((page) => page.chats.length === 0)
-    : false;
+  const historyState = getChatHistoryState({
+    userType: user?.type,
+    isLoading,
+    hasError: Boolean(error),
+    pages: paginatedChatHistories,
+  });
 
   const handleDelete = () => {
     const chatToDelete = deleteId;
@@ -162,7 +181,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     );
   }
 
-  if (isLoading) {
+  if (historyState === "loading") {
     return (
       <div className="mt-3">
         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
@@ -189,10 +208,27 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     );
   }
 
-  if (hasEmptyChatHistory) {
+  if (historyState === "error") {
+    return (
+      <div className="mt-3 flex flex-col items-center gap-2 px-2 text-center text-sm text-zinc-500">
+        <div>{getClientErrorMessage(error)}</div>
+        <button
+          className="rounded-md border border-zinc-300 px-3 py-1 text-xs text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          onClick={() => mutate()}
+          type="button"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (historyState === "guest-empty" || historyState === "empty") {
     return (
       <div className="mt-3 flex w-full flex-row items-center justify-center gap-2 px-2 text-sm text-zinc-500">
-        Your conversations will appear here once you start chatting!
+        {historyState === "guest-empty"
+          ? "Guest mode is active. History is tied to this browser session."
+          : "Your conversations will appear here once you start chatting!"}
       </div>
     );
   }
