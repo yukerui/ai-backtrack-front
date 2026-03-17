@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
@@ -31,6 +31,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -64,13 +65,7 @@ export function AppSidebar({
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
   const isChatRoute = pathname === "/" || pathname?.startsWith("/chat/");
   const isHistoryRoute = pathname === "/chat/history";
-  const [isChatMenuOpen, setIsChatMenuOpen] = useState(isHistoryRoute);
-
-  useEffect(() => {
-    if (isHistoryRoute) {
-      setIsChatMenuOpen(true);
-    }
-  }, [isHistoryRoute]);
+  const [isChatMenuOpen, setIsChatMenuOpen] = useState(false);
 
   const handleDeleteAll = () => {
     const deletePromise = fetch("/api/history", {
@@ -159,38 +154,40 @@ export function AppSidebar({
                     onOpenChange={setIsChatMenuOpen}
                     open={isChatMenuOpen}
                   >
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuButton isActive={isChatRoute} tooltip="Chat">
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isChatRoute}
+                      tooltip="Chat"
+                    >
+                      <Link
+                        href="/chat/new"
+                        onClick={() => {
+                          setOpenMobile(false);
+                        }}
+                      >
                         <HomeIcon size={16} />
                         <span>Chat</span>
+                      </Link>
+                    </SidebarMenuButton>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuAction
+                        aria-label="Toggle chat menu"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }}
+                        showOnHover={false}
+                      >
                         <ChevronDownIcon
-                          className={`ml-auto transition-transform ${
+                          className={`transition-transform ${
                             isChatMenuOpen ? "rotate-180" : ""
                           }`}
                           size={14}
                         />
-                      </SidebarMenuButton>
+                      </SidebarMenuAction>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <SidebarMenuSub>
-                        <SidebarMenuSubItem>
-                          <SidebarMenuSubButton
-                            asChild
-                            isActive={
-                              pathname === "/" || pathname === "/chat/new"
-                            }
-                          >
-                            <Link
-                              href="/chat/new"
-                              onClick={() => {
-                                setOpenMobile(false);
-                              }}
-                            >
-                              <PlusIcon size={14} />
-                              <span>New chat</span>
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
                         <SidebarMenuSubItem>
                           <SidebarMenuSubButton
                             asChild
