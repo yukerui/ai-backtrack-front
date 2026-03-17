@@ -27,7 +27,10 @@ test("buildTurnstileVerificationPath encodes the redirect target", () => {
 
 test("shouldRequireTurnstileVerification only protects chat entry pages", () => {
   assert.equal(shouldRequireTurnstileVerification("/"), true);
+  assert.equal(shouldRequireTurnstileVerification("/chat/new"), true);
   assert.equal(shouldRequireTurnstileVerification("/chat/123"), true);
+  assert.equal(shouldRequireTurnstileVerification("/chat/history"), false);
   assert.equal(shouldRequireTurnstileVerification("/login"), false);
+  assert.equal(shouldRequireTurnstileVerification("/channels"), false);
   assert.equal(shouldRequireTurnstileVerification("/api/chat"), false);
 });

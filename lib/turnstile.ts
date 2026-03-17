@@ -14,7 +14,15 @@ export function isTurnstileEnabled() {
 }
 
 export function shouldRequireTurnstileVerification(pathname: string) {
-  return pathname === "/" || pathname.startsWith("/chat/");
+  if (pathname === "/") {
+    return true;
+  }
+
+  if (pathname === "/chat/history") {
+    return false;
+  }
+
+  return /^\/chat\/[^/]+$/.test(pathname);
 }
 
 export function normalizeTurnstileRedirectPath(
