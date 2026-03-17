@@ -82,7 +82,7 @@ export function AppSidebar({
       success: () => {
         mutate(unstable_serialize(getChatHistoryPaginationKey));
         setShowDeleteAllDialog(false);
-        router.replace("/");
+        router.replace("/chat/new");
         router.refresh();
         return "All chats deleted successfully";
       },
@@ -98,7 +98,7 @@ export function AppSidebar({
             <div className="flex flex-row items-center justify-between">
               <Link
                 className="flex flex-row items-center gap-3"
-                href="/"
+                href="/chat/new"
                 onClick={() => {
                   setOpenMobile(false);
                 }}

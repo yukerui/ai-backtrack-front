@@ -46,6 +46,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { getClientErrorMessage } from "@/lib/errors";
 import { cn, fetcher } from "@/lib/utils";
+import { SidebarToggle } from "./sidebar-toggle";
 
 type BotSummary = {
   bot_slug: string;
@@ -733,13 +734,16 @@ export function BotFatherConsole({
   return (
     <div className="flex h-full flex-col gap-6 p-4 md:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="space-y-2">
-          <h1 className="font-semibold text-2xl tracking-tight">Channels</h1>
-          <p className="max-w-3xl text-muted-foreground text-sm">
-            {isAdmin
-              ? `已登录管理员：${currentUserEmail}`
-              : `当前登录账号：${currentUserEmail}`}
-          </p>
+        <div className="flex items-start gap-3">
+          <SidebarToggle className="mt-1 shrink-0" />
+          <div className="space-y-2">
+            <h1 className="font-semibold text-2xl tracking-tight">Channels</h1>
+            <p className="max-w-3xl text-muted-foreground text-sm">
+              {isAdmin
+                ? `已登录管理员：${currentUserEmail}`
+                : `当前登录账号：${currentUserEmail}`}
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
