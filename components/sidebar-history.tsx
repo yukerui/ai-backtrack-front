@@ -17,10 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  SidebarMenu,
-  useSidebar,
-} from "@/components/ui/sidebar";
+import { SidebarMenu, useSidebar } from "@/components/ui/sidebar";
 import type { Chat } from "@/lib/db/schema";
 import { getClientErrorMessage } from "@/lib/errors";
 import { getChatHistoryState } from "@/lib/history-sidebar";
@@ -166,7 +163,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
         });
 
         if (isCurrentChat) {
-          router.replace("/");
+          router.replace("/chat/new");
           router.refresh();
         }
 

@@ -21,7 +21,7 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   const chat = await getChatById({ id });
 
   if (!chat) {
-    redirect("/");
+    redirect("/chat/new");
   }
 
   const session = await auth();
@@ -32,11 +32,11 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
 
   if (chat.visibility === "private") {
     if (!session.user) {
-      redirect("/");
+      redirect("/chat/new");
     }
 
     if (session.user.id !== chat.userId) {
-      redirect("/");
+      redirect("/chat/new");
     }
   }
 
