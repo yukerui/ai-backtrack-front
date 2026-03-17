@@ -9,6 +9,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import useSWR from "swr";
+import { Response } from "@/components/elements/response";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -149,6 +150,9 @@ const FEISHU_PERMISSION_IMPORT_JSON = `{
     "user": []
   }
 }`;
+
+const FEISHU_ORG_JOIN_MARKDOWN =
+  "**[快点击加入吧！](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=158v3e28-d8fb-40fd-94bd-e8762d48d5e8)**";
 
 function SummaryCard({
   label,
@@ -792,10 +796,17 @@ export function BotFatherConsole({
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>4 步完成接入</CardTitle>
-                <CardDescription>
-                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。
-                </CardDescription>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-1">
+                    <CardTitle>4 步完成接入</CardTitle>
+                    <CardDescription>
+                      按顺序完成飞书配置后，在右侧填写信息创建 Channel。
+                    </CardDescription>
+                  </div>
+                  <Response className="max-w-sm text-red-600 text-sm [&_a]:font-medium [&_a]:text-red-600 [&_a]:underline [&_a]:underline-offset-4">
+                    {FEISHU_ORG_JOIN_MARKDOWN}
+                  </Response>
+                </div>
               </CardHeader>
               <CardContent className="space-y-3">
                 <StepCard
@@ -863,11 +874,11 @@ export function BotFatherConsole({
                         </pre>
                       </CollapsibleContent>
                     </Collapsible>
-                    <div className="rounded-xl border border-dashed bg-background p-4">
-                      <div className="mb-2 font-medium text-foreground text-sm">
-                        继续完成以下配置
-                      </div>
-                      <ol className="list-decimal space-y-2 pl-5 text-foreground text-sm leading-6">
+                    <div className="rounded-2xl border bg-background/80 p-4">
+                      <ol
+                        className="list-decimal space-y-2 pl-5 text-foreground text-sm leading-6"
+                        start={5}
+                      >
                         <li>在“添加应用能力”里启用 Bot。</li>
                         <li>在“事件与回调”里选择长连接。</li>
                         <li>添加事件 `im.message.receive_v1`。</li>
