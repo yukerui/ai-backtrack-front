@@ -114,7 +114,6 @@ type ActionResponse = {
 type CreateFormState = {
   botSlug: string;
   displayName: string;
-  ownerOpenId: string;
   ownerName: string;
   appId: string;
   appSecret: string;
@@ -130,7 +129,6 @@ type BotStateFilter = "all" | "running" | "stopped" | "error";
 const DEFAULT_CREATE_FORM: CreateFormState = {
   botSlug: "",
   displayName: "",
-  ownerOpenId: "",
   ownerName: "",
   appId: "",
   appSecret: "",
@@ -216,6 +214,14 @@ function splitCsv(value: string) {
     .split(/[\n,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function formatOwnerOpenId(value: string | null | undefined) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "待首次消息自动绑定";
+  }
+  return normalized;
 }
 
 async function callApi<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -368,7 +374,6 @@ export function BotFatherConsole({
         body: JSON.stringify({
           botSlug: submittedForm.botSlug,
           displayName: submittedForm.displayName,
-          ownerOpenId: submittedForm.ownerOpenId,
           ownerName: submittedForm.ownerName,
           appId: submittedForm.appId,
           appSecret: submittedForm.appSecret,
@@ -449,7 +454,6 @@ export function BotFatherConsole({
     setCreateForm({
       botSlug: selectedBot.bot_slug,
       displayName: selectedBot.display_name || "",
-      ownerOpenId: selectedBot.owner_open_id,
       ownerName: selectedBot.owner_name || "",
       appId: selectedBot.app_id,
       appSecret: "",
@@ -512,7 +516,8 @@ export function BotFatherConsole({
           </div>
         ) : (
           <div className="rounded-xl border bg-muted/30 p-3 text-muted-foreground text-sm">
-            完成左侧准备后，在这里一次性提交连接信息。默认会在创建后自动启动。
+            完成左侧准备后，在这里一次性提交连接信息。默认会在创建后自动启动，
+            首次给 Bot 发送消息时会自动绑定 Owner Open ID。
           </div>
         )}
 
@@ -554,22 +559,6 @@ export function BotFatherConsole({
                 编辑已有 Channel 时不可修改自定义标识。
               </p>
             ) : null}
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor={inSheet ? "sheet-ownerOpenId" : "ownerOpenId"}>
-              Owner Open ID
-            </Label>
-            <Input
-              id={inSheet ? "sheet-ownerOpenId" : "ownerOpenId"}
-              onChange={(event) =>
-                setCreateForm((current) => ({
-                  ...current,
-                  ownerOpenId: event.target.value,
-                }))
-              }
-              placeholder="ou_xxx"
-              value={createForm.ownerOpenId}
-            />
           </div>
           <div className="space-y-2">
             <Label htmlFor={inSheet ? "sheet-appId" : "appId"}>App ID</Label>
@@ -798,9 +787,10 @@ export function BotFatherConsole({
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>8 步完成接入</CardTitle>
+                <CardTitle>7 步完成接入</CardTitle>
                 <CardDescription>
-                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。
+                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。首次给 Bot
+                  发送私聊消息时，系统会自动绑定 Owner Open ID。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -824,26 +814,12 @@ export function BotFatherConsole({
                   title="准备应用凭证"
                 />
                 <StepCard
-                  description="获取当前拥有者的 Open ID；创建成功后，这个 owner 会自动拥有网页管理权限。"
-                  step={3}
-                  title="获取 Owner Open ID"
-                >
-                  <a
-                    className="inline-flex text-sm text-foreground underline underline-offset-4"
-                    href="https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid"
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    查看 Open ID 获取方法
-                  </a>
-                </StepCard>
-                <StepCard
                   description="在“权限管理 -&gt; 批量导入/导出权限 -&gt; 导入权限”里粘贴 JSON，先把必需权限一次导入。"
-                  step={4}
+                  step={3}
                   title="导入权限"
                 >
                   <Collapsible
-                    className="rounded-xl border bg-muted/30"
+                    className="min-w-0 overflow-hidden rounded-xl border bg-muted/30"
                     defaultOpen={false}
                   >
                     <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -862,31 +838,33 @@ export function BotFatherConsole({
                         </Button>
                       </CollapsibleTrigger>
                     </div>
-                    <CollapsibleContent>
-                      <pre className="mx-3 mb-3 overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs text-foreground">
-                        {FEISHU_PERMISSION_IMPORT_JSON}
-                      </pre>
+                    <CollapsibleContent className="min-w-0">
+                      <div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
+                        <pre className="w-full min-w-0 whitespace-pre-wrap break-all p-3 font-mono text-[13px] leading-5 text-foreground sm:text-xs sm:leading-5 sm:whitespace-pre">
+                          {FEISHU_PERMISSION_IMPORT_JSON}
+                        </pre>
+                      </div>
                     </CollapsibleContent>
                   </Collapsible>
                 </StepCard>
                 <StepCard
                   description="在“添加应用能力”里启用 Bot，应用才具备机器人收发消息能力。"
-                  step={5}
+                  step={4}
                   title="启用 Bot 能力"
                 />
                 <StepCard
                   description="进入“事件与回调”后选择长连接，后续消息事件会通过长连接接入。"
-                  step={6}
+                  step={5}
                   title="选择长连接"
                 />
                 <StepCard
                   description="添加事件 `im.message.receive_v1`，用于接收用户发送给 Bot 的消息。"
-                  step={7}
+                  step={6}
                   title="添加消息事件"
                 />
                 <StepCard
-                  description="最后在“版本管理与发布”里创建版本并发布；未发布前 Bot 不会响应。"
-                  step={8}
+                  description="最后在“版本管理与发布”里创建版本并发布，然后首次给这个 Bot 发送一条私聊消息，系统会自动记录 Owner Open ID。"
+                  step={7}
                   title="创建并发布版本"
                 />
               </CardContent>
@@ -897,7 +875,8 @@ export function BotFatherConsole({
             <CardHeader>
               <CardTitle>接入新 Channel</CardTitle>
               <CardDescription>
-                填写必要信息后即可创建；默认会在创建后立即启动。
+                填写必要信息后即可创建；默认会在创建后立即启动，无需手动查询
+                Open ID。
               </CardDescription>
             </CardHeader>
             <CardContent>{renderChannelForm()}</CardContent>
@@ -1004,7 +983,7 @@ export function BotFatherConsole({
                           </Badge>
                         </div>
                         <div className="w-full text-muted-foreground text-xs">
-                          owner={bot.owner_open_id}
+                          owner={formatOwnerOpenId(bot.owner_open_id)}
                         </div>
                         <div className="w-full text-muted-foreground text-xs">
                           更新于 {formatTimestamp(bot.updated_at)}
@@ -1161,7 +1140,10 @@ export function BotFatherConsole({
                             <span className="break-all font-mono">
                               {selectedBot.bot_slug}
                             </span>
-                            <span>Owner: {selectedBot.owner_open_id}</span>
+                            <span>
+                              Owner:{" "}
+                              {formatOwnerOpenId(selectedBot.owner_open_id)}
+                            </span>
                             <span>App ID: {selectedBot.app_id}</span>
                           </div>
                           {selectedBot.last_error ? (
@@ -1274,7 +1256,7 @@ export function BotFatherConsole({
                           Owner Open ID
                         </div>
                         <div className="mt-1 break-all font-medium text-sm">
-                          {selectedBot.owner_open_id}
+                          {formatOwnerOpenId(selectedBot.owner_open_id)}
                         </div>
                       </div>
                       <div className="rounded-xl border bg-background/80 p-4">
