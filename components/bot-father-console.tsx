@@ -140,9 +140,34 @@ type CreateFormState = {
   force: boolean;
 };
 
-type ViewMode = "onboard" | "manage";
+type CreatePreparationChecklist = {
+  createdFeishuApp: boolean;
+  preparedCredentials: boolean;
+  enabledBotCapability: boolean;
+};
 
-type BotStateFilter = "all" | "running" | "stopped" | "error";
+type ChannelSetupChecklist = {
+  configuredLongConnection: boolean;
+  addedMessageEvent: boolean;
+  publishedVersion: boolean;
+};
+
+type WorkspacePanel = "draft" | "bot";
+
+type ChannelListFilter = "all" | "incomplete" | "ready" | "error";
+
+type ChannelLifecycleStage = "incomplete" | "ready" | "error";
+
+type ChannelRow = {
+  bot: BotSummary;
+  setupChecklist: ChannelSetupChecklist;
+  stage: ChannelLifecycleStage;
+  lifecycleLabel: string;
+  nextStep: string;
+  waitingOn: string[];
+  progress: number;
+  ownerClaimed: boolean;
+};
 
 const DEFAULT_CREATE_FORM: CreateFormState = {
   botSlug: "",
@@ -155,6 +180,20 @@ const DEFAULT_CREATE_FORM: CreateFormState = {
   force: false,
 };
 
+const DEFAULT_CREATE_PREPARATION_CHECKLIST: CreatePreparationChecklist = {
+  createdFeishuApp: false,
+  preparedCredentials: false,
+  enabledBotCapability: false,
+};
+
+const DEFAULT_CHANNEL_SETUP_CHECKLIST: ChannelSetupChecklist = {
+  configuredLongConnection: false,
+  addedMessageEvent: false,
+  publishedVersion: false,
+};
+
+const CHANNEL_SETUP_STORAGE_KEY = "bot-father-channel-setup-v1";
+
 const FEISHU_PERMISSION_IMPORT_JSON = `{
   "scopes": {
     "tenant": [
@@ -166,6 +205,53 @@ const FEISHU_PERMISSION_IMPORT_JSON = `{
     "user": []
   }
 }`;
+
+const CREATE_PREPARATION_STEPS = [
+  {
+    key: "createdFeishuApp",
+    title: "创建飞书应用",
+    description: "先在飞书开放平台创建企业自建应用，后续配置都围绕这个应用完成。",
+  },
+  {
+    key: "preparedCredentials",
+    title: "准备凭证并导入权限",
+    description:
+      "复制 App ID / App Secret，并先导入权限 JSON，避免创建后还要来回找配置入口。",
+  },
+  {
+    key: "enabledBotCapability",
+    title: "启用 Bot 能力",
+    description:
+      "必须先启用 Bot，网页创建成功后服务端才有能力继续接飞书长连接和消息监听。",
+  },
+] satisfies Array<{
+  key: keyof CreatePreparationChecklist;
+  title: string;
+  description: string;
+}>;
+
+const CHANNEL_SETUP_STEPS = [
+  {
+    key: "configuredLongConnection",
+    title: "回飞书选择长连接",
+    description:
+      "创建成功后，再去“事件与回调”里切成长连接；这一步依赖 Bot 已存在。",
+  },
+  {
+    key: "addedMessageEvent",
+    title: "添加消息事件",
+    description: "添加事件 `im.message.receive_v1`，让 Bot 能收到私聊消息。",
+  },
+  {
+    key: "publishedVersion",
+    title: "创建并发布版本",
+    description: "飞书配置改完后记得发布，否则新配置不会生效。",
+  },
+] satisfies Array<{
+  key: keyof ChannelSetupChecklist;
+  title: string;
+  description: string;
+}>;
 
 function SummaryCard({
   label,
@@ -234,6 +320,39 @@ function splitCsv(value: string) {
     .filter(Boolean);
 }
 
+function normalizeChannelSetupChecklist(
+  value?: Partial<ChannelSetupChecklist> | null
+) {
+  return {
+    ...DEFAULT_CHANNEL_SETUP_CHECKLIST,
+    ...(value || {}),
+  };
+}
+
+function readStoredChannelSetupChecklists() {
+  if (typeof window === "undefined") {
+    return {} as Record<string, ChannelSetupChecklist>;
+  }
+  try {
+    const raw = window.localStorage.getItem(CHANNEL_SETUP_STORAGE_KEY);
+    if (!raw) {
+      return {} as Record<string, ChannelSetupChecklist>;
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {} as Record<string, ChannelSetupChecklist>;
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).map(([botSlug, value]) => [
+        botSlug,
+        normalizeChannelSetupChecklist(value as Partial<ChannelSetupChecklist>),
+      ])
+    );
+  } catch {
+    return {} as Record<string, ChannelSetupChecklist>;
+  }
+}
+
 function formatOwnerOpenId(value: string | null | undefined) {
   const normalized = String(value || "").trim();
   if (!normalized) {
@@ -250,16 +369,110 @@ function pairingActionLabel(pairing: PairingSession | null | undefined) {
   return isPendingPairing(pairing) ? "刷新配对码" : "生成配对码";
 }
 
+function formatBotStateLabel(state: string) {
+  switch (state) {
+    case "running":
+      return "运行中";
+    case "stopped":
+      return "已停止";
+    case "error":
+      return "异常";
+    default:
+      return state;
+  }
+}
+
+function deriveChannelSetupChecklist(
+  value: Partial<ChannelSetupChecklist> | undefined,
+  ownerClaimed: boolean
+) {
+  if (ownerClaimed && !value) {
+    return {
+      configuredLongConnection: true,
+      addedMessageEvent: true,
+      publishedVersion: true,
+    } satisfies ChannelSetupChecklist;
+  }
+  return normalizeChannelSetupChecklist(value);
+}
+
+function getChannelLifecycle(
+  bot: BotSummary | BotDetail,
+  value?: Partial<ChannelSetupChecklist>
+): ChannelRow {
+  const ownerClaimed = Boolean(String(bot.owner_open_id || "").trim());
+  const setupChecklist = deriveChannelSetupChecklist(value, ownerClaimed);
+  const waitingOn: string[] = [];
+
+  if (!setupChecklist.configuredLongConnection) {
+    waitingOn.push("回飞书切换到长连接");
+  }
+  if (!setupChecklist.addedMessageEvent) {
+    waitingOn.push("添加消息事件");
+  }
+  if (!setupChecklist.publishedVersion) {
+    waitingOn.push("创建并发布版本");
+  }
+  if (!ownerClaimed) {
+    waitingOn.push("完成 Owner 配对");
+  }
+
+  let stage: ChannelLifecycleStage = "incomplete";
+  if (bot.state === "error") {
+    stage = "error";
+  } else if (!waitingOn.length) {
+    stage = "ready";
+  }
+
+  let lifecycleLabel = "接入中";
+  if (stage === "error") {
+    lifecycleLabel = "异常";
+  } else if (!ownerClaimed) {
+    lifecycleLabel = "待配对";
+  } else if (waitingOn.length) {
+    lifecycleLabel = "待确认";
+  } else {
+    lifecycleLabel = "可管理";
+  }
+
+  return {
+    bot,
+    setupChecklist,
+    stage,
+    lifecycleLabel,
+    nextStep: waitingOn[0] || "进入日常管理",
+    waitingOn,
+    progress:
+      4 + Object.values(setupChecklist).filter(Boolean).length + Number(ownerClaimed),
+    ownerClaimed,
+  };
+}
+
+function lifecycleBadgeClass(stage: ChannelLifecycleStage, ownerClaimed: boolean) {
+  if (stage === "error") {
+    return "border-destructive/30 bg-destructive/5 text-destructive";
+  }
+  if (ownerClaimed && stage === "ready") {
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700";
+  }
+  if (!ownerClaimed) {
+    return "border-amber-500/30 bg-amber-500/10 text-amber-700";
+  }
+  return "border-sky-500/30 bg-sky-500/10 text-sky-700";
+}
+
 function PairingNonceCard({
   botSlug,
   pairing,
   busy,
   onRefresh,
+  onCheckStatus,
 }: {
   botSlug: string;
   pairing: PairingSession | null | undefined;
   busy: boolean;
   onRefresh: (botSlug: string) => void;
+  onCheckStatus?: () => void;
 }) {
   const pending = isPendingPairing(pairing);
   const nonce = pending ? pairing?.nonce : null;
@@ -306,6 +519,16 @@ function PairingNonceCard({
         >
           {busy ? "处理中..." : pairingActionLabel(pairing)}
         </Button>
+        {onCheckStatus ? (
+          <Button
+            disabled={busy}
+            onClick={onCheckStatus}
+            type="button"
+            variant="outline"
+          >
+            我已发送，刷新状态
+          </Button>
+        ) : null}
       </div>
     </div>
   );
@@ -345,23 +568,33 @@ export function BotFatherConsole({
   currentUserEmail: string;
   isAdmin: boolean;
 }) {
-  const [viewMode, setViewMode] = useState<ViewMode>("manage");
+  const [activePanel, setActivePanel] = useState<WorkspacePanel>("bot");
   const [selectedBotSlug, setSelectedBotSlug] = useState<string | null>(null);
   const [editingBotSlug, setEditingBotSlug] = useState<string | null>(null);
   const [editSheetOpen, setEditSheetOpen] = useState(false);
   const [createForm, setCreateForm] =
     useState<CreateFormState>(DEFAULT_CREATE_FORM);
+  const [createPreparation, setCreatePreparation] =
+    useState<CreatePreparationChecklist>(DEFAULT_CREATE_PREPARATION_CHECKLIST);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [logLines, setLogLines] = useState("120");
   const [searchQuery, setSearchQuery] = useState("");
-  const [stateFilter, setStateFilter] = useState<BotStateFilter>("all");
-  const [lastSetupOutput, setLastSetupOutput] = useState("");
-  const [lastSetupBotSlug, setLastSetupBotSlug] = useState<string | null>(null);
-  const [lastSetupStarted, setLastSetupStarted] = useState(false);
-  const [lastSetupPairing, setLastSetupPairing] =
-    useState<PairingSession | null>(null);
+  const [listFilter, setListFilter] = useState<ChannelListFilter>("all");
+  const [channelSetupChecklists, setChannelSetupChecklists] = useState<
+    Record<string, ChannelSetupChecklist>
+  >({});
+  const [setupChecklistsLoaded, setSetupChecklistsLoaded] = useState(false);
+  const [pairingCache, setPairingCache] = useState<
+    Record<string, PairingSession | null>
+  >({});
+  const [recentCreateContext, setRecentCreateContext] = useState<{
+    botSlug: string;
+    output: string;
+    started: boolean;
+  } | null>(null);
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null);
 
   const {
     data: infoData,
@@ -375,32 +608,92 @@ export function BotFatherConsole({
     mutate: mutateBots,
   } = useSWR<BotsResponse>("/api/bot-father/bots", fetcher);
 
+  useEffect(() => {
+    setChannelSetupChecklists(readStoredChannelSetupChecklists());
+    setSetupChecklistsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!setupChecklistsLoaded || typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(
+      CHANNEL_SETUP_STORAGE_KEY,
+      JSON.stringify(channelSetupChecklists)
+    );
+  }, [channelSetupChecklists, setupChecklistsLoaded]);
+
   const botList = botsData?.bots || [];
   const hasBots = botList.length > 0;
-  const runningBotCount = botList.filter(
-    (bot) => bot.state === "running"
-  ).length;
-  const errorBotCount = botList.filter((bot) => bot.state === "error").length;
-  const activeViewMode: ViewMode = hasBots ? viewMode : "onboard";
+  const preCreateReady = Object.values(createPreparation).every(Boolean);
 
-  const filteredBotList = useMemo(() => {
+  const botRows = useMemo(() => {
+    return [...botList]
+      .map((bot) => getChannelLifecycle(bot, channelSetupChecklists[bot.bot_slug]))
+      .sort((left, right) => {
+        const stageRank: Record<ChannelLifecycleStage, number> = {
+          error: 0,
+          incomplete: 1,
+          ready: 2,
+        };
+        const stageDiff = stageRank[left.stage] - stageRank[right.stage];
+        if (stageDiff !== 0) {
+          return stageDiff;
+        }
+        return (
+          new Date(right.bot.updated_at).getTime() -
+          new Date(left.bot.updated_at).getTime()
+        );
+      });
+  }, [botList, channelSetupChecklists]);
+
+  const inProgressBotCount = botRows.filter((row) => row.stage !== "ready").length;
+  const readyBotCount = botRows.filter((row) => row.stage === "ready").length;
+  const errorBotCount = botRows.filter((row) => row.stage === "error").length;
+
+  const filteredBotRows = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
-    return botList.filter((bot) => {
-      if (stateFilter !== "all" && bot.state !== stateFilter) {
+    return botRows.filter((row) => {
+      if (listFilter === "incomplete" && row.stage === "ready") {
+        return false;
+      }
+      if (listFilter === "ready" && row.stage !== "ready") {
+        return false;
+      }
+      if (listFilter === "error" && row.stage !== "error") {
         return false;
       }
       if (!normalizedQuery) {
         return true;
       }
-      return [bot.bot_slug, bot.display_name || "", bot.owner_open_id]
+      return [
+        row.bot.bot_slug,
+        row.bot.display_name || "",
+        row.bot.owner_open_id,
+        row.lifecycleLabel,
+        row.nextStep,
+      ]
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery);
     });
-  }, [botList, searchQuery, stateFilter]);
+  }, [botRows, listFilter, searchQuery]);
+
+  const firstIncompleteBotSlug =
+    botRows.find((row) => row.stage !== "ready")?.bot.bot_slug || null;
 
   useEffect(() => {
-    if (!filteredBotList.length) {
+    if (!hasBots) {
+      setActivePanel("draft");
+      if (selectedBotSlug !== null) {
+        setSelectedBotSlug(null);
+      }
+      return;
+    }
+    if (activePanel !== "bot") {
+      return;
+    }
+    if (!filteredBotRows.length) {
       if (selectedBotSlug !== null) {
         setSelectedBotSlug(null);
       }
@@ -408,18 +701,18 @@ export function BotFatherConsole({
     }
     if (
       !selectedBotSlug ||
-      !filteredBotList.some((bot) => bot.bot_slug === selectedBotSlug)
+      !filteredBotRows.some((row) => row.bot.bot_slug === selectedBotSlug)
     ) {
-      setSelectedBotSlug(filteredBotList[0]?.bot_slug || null);
+      setSelectedBotSlug(filteredBotRows[0]?.bot.bot_slug || null);
     }
-  }, [filteredBotList, selectedBotSlug]);
+  }, [activePanel, filteredBotRows, hasBots, selectedBotSlug]);
 
   const detailKey = useMemo(() => {
-    if (!selectedBotSlug) {
+    if (activePanel !== "bot" || !selectedBotSlug) {
       return null;
     }
     return `/api/bot-father/bots/${encodeURIComponent(selectedBotSlug)}`;
-  }, [selectedBotSlug]);
+  }, [activePanel, selectedBotSlug]);
 
   const {
     data: detailData,
@@ -430,9 +723,10 @@ export function BotFatherConsole({
 
   const selectedBot = detailData?.bot || null;
   const selectedBotRunning = selectedBot?.state === "running";
-  const selectedBotOwnerClaimed = Boolean(
-    String(selectedBot?.owner_open_id || "").trim()
-  );
+  const selectedLifecycle = selectedBot
+    ? getChannelLifecycle(selectedBot, channelSetupChecklists[selectedBot.bot_slug])
+    : null;
+  const selectedBotOwnerClaimed = selectedLifecycle?.ownerClaimed || false;
   const pairingKey = useMemo(() => {
     if (!selectedBot || selectedBotOwnerClaimed) {
       return null;
@@ -444,7 +738,18 @@ export function BotFatherConsole({
     mutate: mutatePairing,
     isLoading: pairingLoading,
   } = useSWR<PairingResponse>(pairingKey, fetcher);
-  const selectedBotPairing = pairingData?.pairing || null;
+  const selectedBotPairing =
+    selectedBot && !selectedBotOwnerClaimed
+      ? pairingData?.pairing || pairingCache[selectedBot.bot_slug] || null
+      : null;
+  const activeViewMode = activePanel === "draft" ? "onboard" : "manage";
+  const filteredBotList = filteredBotRows.map((row) => row.bot);
+  const lastSetupBotSlug = recentCreateContext?.botSlug || null;
+  const lastSetupStarted = recentCreateContext?.started || false;
+  const lastSetupOutput = recentCreateContext?.output || "";
+  const lastSetupPairing = lastSetupBotSlug
+    ? pairingCache[lastSetupBotSlug] || null
+    : null;
   let selectedBotPairingSection: ReactNode = null;
   if (selectedBot && !selectedBotOwnerClaimed) {
     if (pairingLoading && !selectedBotPairing) {
@@ -458,12 +763,27 @@ export function BotFatherConsole({
         <PairingNonceCard
           botSlug={selectedBot.bot_slug}
           busy={busyAction === "pairing"}
+          onCheckStatus={() => {
+            refreshCurrentBot();
+          }}
           onRefresh={handleRefreshPairing}
           pairing={selectedBotPairing}
         />
       );
     }
   }
+
+  useEffect(() => {
+    if (!scrollTarget) {
+      return;
+    }
+    const targetElement = document.getElementById(scrollTarget);
+    if (!targetElement) {
+      return;
+    }
+    targetElement.scrollIntoView({ behavior: "smooth", block: "start" });
+    setScrollTarget(null);
+  }, [activePanel, detailLoading, scrollTarget, selectedBot?.bot_slug]);
 
   async function refreshCurrentBot() {
     await Promise.all([mutateBots(), mutateDetail(), mutatePairing()]);
@@ -481,9 +801,10 @@ export function BotFatherConsole({
           },
         }
       );
-      if (lastSetupBotSlug === botSlug) {
-        setLastSetupPairing(result.pairing || null);
-      }
+      setPairingCache((current) => ({
+        ...current,
+        [botSlug]: result.pairing || null,
+      }));
       await Promise.all([mutatePairing(), mutateBots(), mutateDetail()]);
       toast.success("配对码已刷新");
     } catch (error) {
@@ -491,6 +812,38 @@ export function BotFatherConsole({
     } finally {
       setBusyAction(null);
     }
+  }
+
+  function updateChannelSetupChecklist(
+    botSlug: string,
+    key: keyof ChannelSetupChecklist,
+    checked: boolean
+  ) {
+    setChannelSetupChecklists((current) => ({
+      ...current,
+      [botSlug]: {
+        ...normalizeChannelSetupChecklist(current[botSlug]),
+        [key]: checked,
+      },
+    }));
+  }
+
+  function updateCreatePreparationChecklist(
+    key: keyof CreatePreparationChecklist,
+    checked: boolean
+  ) {
+    setCreatePreparation((current) => ({
+      ...current,
+      [key]: checked,
+    }));
+  }
+
+  function openDraftChannelWorkbench() {
+    setActivePanel("draft");
+    setCreateForm(DEFAULT_CREATE_FORM);
+    setCreatePreparation(DEFAULT_CREATE_PREPARATION_CHECKLIST);
+    setEditingBotSlug(null);
+    setScrollTarget("draft-precreate-checklist");
   }
 
   function closeEditSheet() {
@@ -533,16 +886,31 @@ export function BotFatherConsole({
         setConsoleOutput(result.output || "更新完成");
         closeEditSheet();
       } else {
-        setLastSetupOutput(result.output || "创建完成");
-        setLastSetupBotSlug(submittedForm.botSlug);
-        setLastSetupStarted(submittedForm.start);
-        setLastSetupPairing(result.pairing || null);
+        setRecentCreateContext({
+          botSlug: submittedForm.botSlug,
+          output: result.output || "创建完成",
+          started: submittedForm.start,
+        });
+        setPairingCache((current) => ({
+          ...current,
+          [submittedForm.botSlug]: result.pairing || null,
+        }));
+        setCreateForm(DEFAULT_CREATE_FORM);
+        setCreatePreparation(DEFAULT_CREATE_PREPARATION_CHECKLIST);
         setConsoleOutput("");
       }
+      setActivePanel("bot");
       setSelectedBotSlug(submittedForm.botSlug);
-      setViewMode("manage");
-      await Promise.all([mutateBots(), mutateDetail()]);
-      toast.success(editingSlug ? "Channel 已更新" : "Channel 已创建");
+      setScrollTarget(editingSlug ? "channel-management-card" : "channel-next-steps");
+      await mutateBots();
+      if (editingSlug) {
+        await mutateDetail();
+      }
+      toast.success(
+        editingSlug
+          ? "Channel 已更新"
+          : "基础连接已创建，继续完成飞书长连接和 Owner 配对"
+      );
     } catch (error) {
       toast.error(getClientErrorMessage(error));
     } finally {
@@ -625,24 +993,33 @@ export function BotFatherConsole({
     if (!selectedBotSlug) {
       return;
     }
+    const deletingBotSlug = selectedBotSlug;
     setBusyAction("delete");
     try {
       const result = await callApi<ActionResponse>(
-        `/api/bot-father/bots/${encodeURIComponent(selectedBotSlug)}`,
+        `/api/bot-father/bots/${encodeURIComponent(deletingBotSlug)}`,
         {
           method: "DELETE",
         }
       );
       setDeleteDialogOpen(false);
-      setConsoleOutput(result.output || `已删除 ${selectedBotSlug}`);
-      if (lastSetupBotSlug === selectedBotSlug) {
-        setLastSetupBotSlug(null);
-        setLastSetupOutput("");
-        setLastSetupStarted(false);
-        setLastSetupPairing(null);
+      setConsoleOutput(result.output || `已删除 ${deletingBotSlug}`);
+      setChannelSetupChecklists((current) => {
+        const next = { ...current };
+        delete next[deletingBotSlug];
+        return next;
+      });
+      setPairingCache((current) => {
+        const next = { ...current };
+        delete next[deletingBotSlug];
+        return next;
+      });
+      if (recentCreateContext?.botSlug === deletingBotSlug) {
+        setRecentCreateContext(null);
       }
       closeEditSheet();
       setSelectedBotSlug(null);
+      setActivePanel("bot");
       await Promise.all([mutateBots(), mutateDetail()]);
       toast.success("Bot 已删除");
     } catch (error) {
@@ -665,9 +1042,9 @@ export function BotFatherConsole({
           </div>
         ) : (
           <div className="rounded-xl border bg-muted/30 p-3 text-muted-foreground text-sm">
-            完成左侧准备后，在这里一次性提交连接信息。默认会在创建后自动启动，
-            创建完成后网页会生成一串配对码，你需要把这串配对码私聊发给自己的
-            Bot，系统才会绑定 Owner Open ID。
+            先在飞书侧创建应用并启用 Bot，再在这里提交 App ID / App Secret。
+            创建成功后，页面不会跳走，而是继续带你完成长连接、事件、发布和
+            Owner 配对。
           </div>
         )}
 
@@ -837,15 +1214,42 @@ export function BotFatherConsole({
           </CollapsibleContent>
         </Collapsible>
 
+        {!isEditing && !preCreateReady ? (
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-amber-800 text-sm">
+            你还没有确认完创建前准备。推荐先完成左侧 1-3 步；如果你已经在飞书
+            后台做完，也可以继续创建。
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap gap-3">
-          <Button disabled={busyAction === "create"} type="submit">
+          {!isEditing && !preCreateReady ? (
+            <Button
+              disabled={busyAction === "create"}
+              onClick={() => {
+                setScrollTarget("draft-precreate-checklist");
+              }}
+              type="button"
+              variant="outline"
+            >
+              继续检查前置步骤
+            </Button>
+          ) : null}
+          <Button
+            disabled={busyAction === "create"}
+            type="submit"
+            variant={!isEditing && !preCreateReady ? "outline" : "default"}
+          >
             {busyAction === "create"
               ? "提交中..."
               : isEditing
                 ? "保存修改"
                 : createForm.start
-                  ? "创建并启动"
-                  : "创建 Channel"}
+                  ? preCreateReady
+                    ? "创建并启动"
+                    : "我确认无误，仍要创建并启动"
+                  : preCreateReady
+                    ? "创建 Channel"
+                    : "我确认无误，仍要创建"}
           </Button>
           {isEditing ? (
             <Button
@@ -884,7 +1288,7 @@ export function BotFatherConsole({
               <p className="max-w-3xl text-muted-foreground text-sm">
                 {isAdmin
                   ? `已登录管理员：${currentUserEmail}`
-                  : `当前登录账号：${currentUserEmail}`}
+                  : `当前登录账号：${currentUserEmail}`}。创建成功后会继续留在接入流程，直到飞书长连接、消息事件、发布和 Owner 配对补齐为止。
               </p>
             </div>
           </div>
@@ -892,38 +1296,52 @@ export function BotFatherConsole({
           <div className="flex flex-wrap gap-2 lg:justify-self-end">
             <Button
               onClick={() => {
-                resetCreateBotForm();
-                setViewMode("onboard");
+                openDraftChannelWorkbench();
               }}
               type="button"
               variant={activeViewMode === "onboard" ? "default" : "outline"}
             >
-              接入新 Channel
+              新建 Channel
             </Button>
             <Button
-              disabled={!hasBots}
+              disabled={!firstIncompleteBotSlug}
               onClick={() => {
-                setViewMode("manage");
+                if (!firstIncompleteBotSlug) {
+                  return;
+                }
+                setActivePanel("bot");
+                setSelectedBotSlug(firstIncompleteBotSlug);
               }}
               type="button"
-              variant={activeViewMode === "manage" ? "default" : "outline"}
+              variant={
+                activePanel === "bot" &&
+                Boolean(firstIncompleteBotSlug) &&
+                selectedBotSlug === firstIncompleteBotSlug
+                  ? "default"
+                  : "outline"
+              }
             >
-              管理已有 Channel
+              继续未完成接入
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           hint="当前账号可管理的 Channel 数量"
           label="Channels"
           value={String(botList.length)}
         />
         <SummaryCard
-          hint="正在运行中的 Bridge 数量"
-          label="运行中"
-          value={String(runningBotCount)}
+          hint="还没补齐接入或仍需继续操作的 Channel"
+          label="接入中"
+          value={String(inProgressBotCount)}
+        />
+        <SummaryCard
+          hint="接入链路已补齐，可直接做日常管理"
+          label="可管理"
+          value={String(readyBotCount)}
         />
         <SummaryCard
           hint="需要优先排查的异常项"
@@ -937,96 +1355,185 @@ export function BotFatherConsole({
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>7 步完成接入</CardTitle>
+                <CardTitle>创建与接入工作台</CardTitle>
                 <CardDescription>
-                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。创建成功后，
-                  网页会生成一串一次性配对码，你需要把它私聊发给自己的 Bot。
+                  先在飞书完成创建前准备，再在右侧提交 App ID / App Secret。
+                  创建成功后，页面会继续把你留在这里完成长连接、事件、发布和
+                  Owner 配对。
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                <StepCard
-                  description="在飞书开放平台创建企业自建应用，后续所有配置都在这个应用里完成。"
-                  step={1}
-                  title="创建飞书应用"
+              <CardContent className="space-y-5">
+                <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-900">
+                  关键顺序已经替你理顺了：先启用 Bot，网页创建成功后，服务端才有能力继续接飞书长连接。
+                </div>
+
+                <a
+                  className="inline-flex text-sm text-foreground underline underline-offset-4"
+                  href="https://open.feishu.cn/app"
+                  rel="noreferrer"
+                  target="_blank"
                 >
-                  <a
-                    className="inline-flex text-sm text-foreground underline underline-offset-4"
-                    href="https://open.feishu.cn/app"
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    打开飞书开放平台
-                  </a>
-                </StepCard>
-                <StepCard
-                  description="进入“凭证与基础信息”，复制 App ID 和 App Secret，稍后直接填到右侧表单。"
-                  step={2}
-                  title="准备应用凭证"
-                />
-                <StepCard
-                  description="在“权限管理 -&gt; 批量导入/导出权限 -&gt; 导入权限”里粘贴 JSON，先把必需权限一次导入。"
-                  step={3}
-                  title="导入权限"
-                >
-                  <Collapsible
-                    className="min-w-0 overflow-hidden rounded-xl border bg-muted/30"
-                    defaultOpen={false}
-                  >
-                    <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="space-y-1">
-                        <p className="font-medium text-foreground text-sm">
-                          权限导入 JSON
-                        </p>
-                        <p className="text-muted-foreground text-xs">
-                          在“权限管理 -&gt; 批量导入/导出权限 -&gt;
-                          导入权限”里直接粘贴。
-                        </p>
+                  打开飞书开放平台
+                </a>
+
+                <div className="space-y-3" id="draft-precreate-checklist">
+                  {CREATE_PREPARATION_STEPS.map((step, index) => (
+                    <label
+                      className="flex gap-3 rounded-2xl border bg-background/80 p-4"
+                      key={step.key}
+                    >
+                      <input
+                        checked={createPreparation[step.key]}
+                        className="mt-1 h-4 w-4"
+                        onChange={(event) => {
+                          updateCreatePreparationChecklist(
+                            step.key,
+                            event.target.checked
+                          );
+                        }}
+                        type="checkbox"
+                      />
+                      <div className="min-w-0 space-y-1">
+                        <div className="font-medium text-sm">
+                          {index + 1}. {step.title}
+                        </div>
+                        <div className="text-muted-foreground text-sm">
+                          {step.description}
+                        </div>
                       </div>
-                      <CollapsibleTrigger asChild>
-                        <Button size="sm" type="button" variant="outline">
-                          查看 JSON
-                        </Button>
-                      </CollapsibleTrigger>
+                    </label>
+                  ))}
+                </div>
+
+                <Collapsible
+                  className="min-w-0 overflow-hidden rounded-xl border bg-muted/30"
+                  defaultOpen={false}
+                >
+                  <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <p className="font-medium text-foreground text-sm">
+                        权限导入 JSON
+                      </p>
+                      <p className="text-muted-foreground text-xs">
+                        在“权限管理 -&gt; 批量导入/导出权限 -&gt;
+                        导入权限”里直接粘贴。
+                      </p>
                     </div>
-                    <CollapsibleContent className="min-w-0">
-                      <div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
-                        <pre className="w-full min-w-0 whitespace-pre-wrap break-all p-3 font-mono text-[13px] leading-5 text-foreground sm:text-xs sm:leading-5 sm:whitespace-pre">
-                          {FEISHU_PERMISSION_IMPORT_JSON}
-                        </pre>
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
-                </StepCard>
-                <StepCard
-                  description="在“添加应用能力”里启用 Bot，应用才具备机器人收发消息能力。"
-                  step={4}
-                  title="启用 Bot 能力"
-                />
-                <StepCard
-                  description="进入“事件与回调”后选择长连接，后续消息事件会通过长连接接入。"
-                  step={5}
-                  title="选择长连接"
-                />
-                <StepCard
-                  description="添加事件 `im.message.receive_v1`，用于接收用户发送给 Bot 的消息。"
-                  step={6}
-                  title="添加消息事件"
-                />
-                <StepCard
-                  description="最后在“版本管理与发布”里创建版本并发布。回到网页生成配对码，再把这串配对码私聊发送给你的 Bot，校验成功后才会绑定 Owner。"
-                  step={7}
-                  title="创建并发布版本"
-                />
+                    <CollapsibleTrigger asChild>
+                      <Button size="sm" type="button" variant="outline">
+                        查看 JSON
+                      </Button>
+                    </CollapsibleTrigger>
+                  </div>
+                  <CollapsibleContent className="min-w-0">
+                    <div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
+                      <pre className="w-full min-w-0 whitespace-pre-wrap break-all p-3 font-mono text-[13px] leading-5 text-foreground sm:text-xs sm:leading-5 sm:whitespace-pre">
+                        {FEISHU_PERMISSION_IMPORT_JSON}
+                      </pre>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+
+                <div className="space-y-3 rounded-2xl border bg-muted/20 p-4">
+                  <div>
+                    <div className="font-medium text-sm">创建后继续完成的 4 步</div>
+                    <div className="text-muted-foreground text-sm">
+                      这些步骤依赖 Bot 已经创建成功。创建后页面不会跳走，而是继续在这里显示下一步。
+                    </div>
+                  </div>
+                  <StepCard
+                    description="回飞书“事件与回调”切成长连接。这一步必须在 Bot 创建后做。"
+                    step={5}
+                    title="选择长连接"
+                  />
+                  <StepCard
+                    description="添加事件 `im.message.receive_v1`，否则 Bot 收不到私聊配对消息。"
+                    step={6}
+                    title="添加消息事件"
+                  />
+                  <StepCard
+                    description="创建并发布版本，让长连接和事件配置真正生效。"
+                    step={7}
+                    title="创建并发布版本"
+                  />
+                  <StepCard
+                    description="回网页生成配对码，再把它私聊发给 Bot 完成 Owner 绑定。"
+                    step={8}
+                    title="完成 Owner 配对"
+                  />
+                </div>
               </CardContent>
             </Card>
+
+            {lastSetupBotSlug ? (
+              <Card
+                className="border-emerald-500/20 bg-emerald-500/5"
+                id="channel-next-steps"
+              >
+                <CardHeader>
+                  <CardTitle>创建成功，继续完成接入</CardTitle>
+                  <CardDescription>
+                    `{lastSetupBotSlug}` 的基础连接已经创建。现在不要离开这个工作台，继续完成长连接、事件、发布和 Owner 配对。
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4 text-sm">
+                  <div className="grid gap-2 text-muted-foreground">
+                    <div>1. 回飞书选择长连接。</div>
+                    <div>2. 添加消息事件 `im.message.receive_v1`。</div>
+                    <div>3. 创建并发布版本。</div>
+                    <div>4. 回到网页生成配对码，并把它私聊发给自己的 Bot。</div>
+                    <div>
+                      {lastSetupStarted
+                        ? "系统已按默认策略请求启动 Bridge。"
+                        : "本次只创建了 Channel，未自动启动 Bridge。"}
+                    </div>
+                  </div>
+                  <PairingNonceCard
+                    botSlug={lastSetupBotSlug}
+                    busy={busyAction === "pairing"}
+                    onCheckStatus={() => {
+                      setActivePanel("bot");
+                      setSelectedBotSlug(lastSetupBotSlug);
+                      refreshCurrentBot();
+                    }}
+                    onRefresh={handleRefreshPairing}
+                    pairing={lastSetupPairing}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={() => {
+                        setActivePanel("bot");
+                        setSelectedBotSlug(lastSetupBotSlug);
+                      }}
+                      type="button"
+                    >
+                      打开这个 Channel
+                    </Button>
+                  </div>
+                  <Collapsible defaultOpen={false}>
+                    <CollapsibleTrigger asChild>
+                      <Button size="sm" type="button" variant="outline">
+                        查看本次创建输出
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <Textarea
+                        className="mt-3 min-h-[220px] font-mono text-xs"
+                        readOnly
+                        value={lastSetupOutput}
+                      />
+                    </CollapsibleContent>
+                  </Collapsible>
+                </CardContent>
+              </Card>
+            ) : null}
           </div>
 
           <Card id="channel-form-card">
             <CardHeader>
-              <CardTitle>接入新 Channel</CardTitle>
+              <CardTitle>创建基础连接</CardTitle>
               <CardDescription>
-                填写必要信息后即可创建；默认会在创建后立即启动。Owner Open ID
-                通过后续配对码自动识别，无需手动查询。
+                这里先提交 App ID / App Secret。创建成功后不会跳到“已创建”页，而是继续在当前工作台提示你完成后续步骤。
               </CardDescription>
             </CardHeader>
             <CardContent>{renderChannelForm()}</CardContent>
@@ -1037,10 +1544,9 @@ export function BotFatherConsole({
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>我的 Channels</CardTitle>
+                <CardTitle>接入列表</CardTitle>
                 <CardDescription>
-                  先选中一个
-                  Channel，再到右侧执行启动、停止、编辑、诊断或日志操作。
+                  未完成的 Channel 会优先排在前面。先选中一个，再到右侧继续接入或做日常管理。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1049,25 +1555,25 @@ export function BotFatherConsole({
                     onChange={(event) => {
                       setSearchQuery(event.target.value);
                     }}
-                    placeholder="搜索名称、标识或 owner open id"
+                    placeholder="搜索名称、标识、owner 或下一步"
                     value={searchQuery}
                   />
                   <div className="flex flex-wrap gap-2">
                     {[
                       { label: "全部", value: "all" },
-                      { label: "运行中", value: "running" },
-                      { label: "已停止", value: "stopped" },
+                      { label: "接入中", value: "incomplete" },
+                      { label: "可管理", value: "ready" },
                       { label: "异常", value: "error" },
                     ].map((filter) => (
                       <Button
                         key={filter.value}
                         onClick={() => {
-                          setStateFilter(filter.value as BotStateFilter);
+                          setListFilter(filter.value as ChannelListFilter);
                         }}
                         size="sm"
                         type="button"
                         variant={
-                          stateFilter === filter.value ? "default" : "outline"
+                          listFilter === filter.value ? "default" : "outline"
                         }
                       >
                         {filter.label}
@@ -1078,6 +1584,7 @@ export function BotFatherConsole({
                       onClick={() => {
                         mutateBots();
                         mutateDetail();
+                        mutatePairing();
                       }}
                       size="sm"
                       type="button"
@@ -1105,8 +1612,10 @@ export function BotFatherConsole({
                   </p>
                 ) : null}
                 <div className="space-y-3">
-                  {filteredBotList.map((bot) => {
-                    const isActive = bot.bot_slug === selectedBotSlug;
+                  {filteredBotRows.map((row) => {
+                    const { bot } = row;
+                    const isActive =
+                      activePanel === "bot" && bot.bot_slug === selectedBotSlug;
                     return (
                       <button
                         className={cn(
@@ -1116,7 +1625,10 @@ export function BotFatherConsole({
                             : "border-border hover:bg-muted/50"
                         )}
                         key={bot.bot_slug}
-                        onClick={() => setSelectedBotSlug(bot.bot_slug)}
+                        onClick={() => {
+                          setActivePanel("bot");
+                          setSelectedBotSlug(bot.bot_slug);
+                        }}
                         type="button"
                       >
                         <div className="flex w-full items-center justify-between gap-3">
@@ -1128,12 +1640,26 @@ export function BotFatherConsole({
                               {bot.bot_slug}
                             </div>
                           </div>
-                          <Badge variant={stateVariant(bot.state)}>
-                            {bot.state}
-                          </Badge>
+                          <div className="flex flex-wrap gap-2">
+                            <span
+                              className={cn(
+                                "inline-flex rounded-full border px-2.5 py-1 text-xs",
+                                lifecycleBadgeClass(row.stage, row.ownerClaimed)
+                              )}
+                            >
+                              {row.lifecycleLabel}
+                            </span>
+                            <Badge variant={stateVariant(bot.state)}>
+                              {formatBotStateLabel(bot.state)}
+                            </Badge>
+                          </div>
                         </div>
                         <div className="w-full text-muted-foreground text-xs">
-                          owner={formatOwnerOpenId(bot.owner_open_id)}
+                          下一步：{row.nextStep}
+                        </div>
+                        <div className="w-full text-muted-foreground text-xs">
+                          owner={formatOwnerOpenId(bot.owner_open_id)} · 已完成{" "}
+                          {row.progress} / 8
                         </div>
                         <div className="w-full text-muted-foreground text-xs">
                           更新于 {formatTimestamp(bot.updated_at)}
@@ -1198,16 +1724,16 @@ export function BotFatherConsole({
             {lastSetupBotSlug ? (
               <Card className="border-emerald-500/20 bg-emerald-500/5">
                 <CardHeader>
-                  <CardTitle>最近接入结果</CardTitle>
+                  <CardTitle>最近创建的 Channel</CardTitle>
                   <CardDescription>
-                    `{lastSetupBotSlug}` 已完成接入，系统已经替你做好以下动作。
+                    `{lastSetupBotSlug}` 只完成了基础连接创建，还没有自动变成“接入完成”。
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4 text-sm">
                   <div className="grid gap-2 text-muted-foreground">
                     <div>凭证已通过校验，Channel 注册信息已经保存。</div>
                     <div>
-                      接入结果已自动切换到管理视图，便于继续查看状态和日志。
+                      接下来仍要回飞书完成长连接、消息事件和版本发布。
                     </div>
                     <div>
                       {lastSetupStarted
@@ -1222,6 +1748,11 @@ export function BotFatherConsole({
                   <PairingNonceCard
                     botSlug={lastSetupBotSlug}
                     busy={busyAction === "pairing"}
+                    onCheckStatus={() => {
+                      setActivePanel("bot");
+                      setSelectedBotSlug(lastSetupBotSlug);
+                      refreshCurrentBot();
+                    }}
                     onRefresh={handleRefreshPairing}
                     pairing={lastSetupPairing}
                   />
@@ -1229,6 +1760,7 @@ export function BotFatherConsole({
                     <Button
                       onClick={() => {
                         if (lastSetupBotSlug) {
+                          setActivePanel("bot");
                           setSelectedBotSlug(lastSetupBotSlug);
                         }
                       }}
@@ -1259,7 +1791,7 @@ export function BotFatherConsole({
               <CardHeader>
                 <CardTitle>Channel 详情与操作</CardTitle>
                 <CardDescription>
-                  高频操作前置，低频技术信息和危险操作折叠，减少管理视图的视觉噪音。
+                  先看接入状态，再做启停、编辑、日志和排障。接入未完成时，右侧会优先显示配对和下一步。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -1288,8 +1820,21 @@ export function BotFatherConsole({
                               {selectedBot.display_name || selectedBot.bot_slug}
                             </div>
                             <Badge variant={stateVariant(selectedBot.state)}>
-                              {selectedBot.state}
+                              {formatBotStateLabel(selectedBot.state)}
                             </Badge>
+                            {selectedLifecycle ? (
+                              <span
+                                className={cn(
+                                  "rounded-full border px-2.5 py-1 text-xs",
+                                  lifecycleBadgeClass(
+                                    selectedLifecycle.stage,
+                                    selectedLifecycle.ownerClaimed
+                                  )
+                                )}
+                              >
+                                {selectedLifecycle.lifecycleLabel}
+                              </span>
+                            ) : null}
                             {selectedBotRunning ? (
                               <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-700 text-xs">
                                 运行中，请先停止后编辑
@@ -1312,8 +1857,9 @@ export function BotFatherConsole({
                             </div>
                           ) : (
                             <div className="text-muted-foreground text-sm">
-                              当前 Channel
-                              已就绪，可以直接进行启停、编辑和排障。
+                              {selectedLifecycle?.stage === "ready"
+                                ? "接入链路已补齐，可以直接进行启停、编辑和排障。"
+                                : `主任务仍是：${selectedLifecycle?.nextStep || "继续接入"}`}
                             </div>
                           )}
                         </div>
@@ -1333,6 +1879,67 @@ export function BotFatherConsole({
                             <div className="mt-1 font-medium text-sm">
                               {formatTimestamp(selectedBot.last_started_at)}
                             </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="space-y-1">
+                          <div className="font-medium text-sm">接入进度</div>
+                          <div className="text-muted-foreground text-sm">
+                            基础连接创建只算开始。长连接、消息事件、发布和 Owner
+                            配对补齐后，才算真正完成接入。
+                          </div>
+                        </div>
+                        <div className="rounded-xl border bg-background/80 px-4 py-3 text-sm">
+                          已完成{" "}
+                          <span className="font-semibold text-base">
+                            {selectedLifecycle?.progress || 0}/8
+                          </span>
+                          <div className="text-muted-foreground text-xs">
+                            下一步：{selectedLifecycle?.nextStep || "-"}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-3">
+                        {CHANNEL_SETUP_STEPS.map((step) => (
+                          <label
+                            className="flex gap-3 rounded-2xl border bg-background/80 p-4"
+                            key={step.key}
+                          >
+                            <input
+                              checked={
+                                selectedLifecycle?.setupChecklist[step.key] || false
+                              }
+                              className="mt-1 h-4 w-4"
+                              onChange={(event) => {
+                                updateChannelSetupChecklist(
+                                  selectedBot.bot_slug,
+                                  step.key,
+                                  event.target.checked
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                            <div className="min-w-0 space-y-1">
+                              <div className="font-medium text-sm">
+                                {step.title}
+                              </div>
+                              <div className="text-muted-foreground text-sm">
+                                {step.description}
+                              </div>
+                            </div>
+                          </label>
+                        ))}
+                        <div className="rounded-2xl border bg-background/80 p-4">
+                          <div className="font-medium text-sm">Owner 配对</div>
+                          <div className="mt-1 text-muted-foreground text-sm">
+                            {selectedBotOwnerClaimed
+                              ? "当前飞书账号已完成 Owner 绑定。"
+                              : "把配对码私聊发给自己的 Bot 后，再回来刷新状态。"}
                           </div>
                         </div>
                       </div>
@@ -1403,16 +2010,16 @@ export function BotFatherConsole({
                           {selectedBot.display_name || "-"}
                         </div>
                       </div>
-                      <div className="rounded-xl border bg-background/80 p-4">
-                        <div className="text-muted-foreground text-xs">
-                          状态
+                        <div className="rounded-xl border bg-background/80 p-4">
+                          <div className="text-muted-foreground text-xs">
+                            状态
+                          </div>
+                          <div className="mt-1">
+                            <Badge variant={stateVariant(selectedBot.state)}>
+                              {formatBotStateLabel(selectedBot.state)}
+                            </Badge>
+                          </div>
                         </div>
-                        <div className="mt-1">
-                          <Badge variant={stateVariant(selectedBot.state)}>
-                            {selectedBot.state}
-                          </Badge>
-                        </div>
-                      </div>
                       <div className="rounded-xl border bg-background/80 p-4">
                         <div className="text-muted-foreground text-xs">
                           Owner Open ID
