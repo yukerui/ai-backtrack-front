@@ -8,21 +8,36 @@ import "./globals.css";
 import { SessionProvider } from "next-auth/react";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://chat.vercel.ai"),
-  title: "免费回测工具",
-  description: "Next.js chatbot template using the AI SDK.",
+	metadataBase: new URL("https://chat.vercel.ai"),
+	title: "免费回测工具",
+	description: "Next.js chatbot template using the AI SDK.",
+	icons: {
+		apple: "/site-icon.png",
+		icon: [
+			{
+				sizes: "any",
+				url: "/favicon.ico",
+			},
+			{
+				sizes: "248x248",
+				type: "image/png",
+				url: "/site-icon.png",
+			},
+		],
+		shortcut: "/favicon.ico",
+	},
 };
 
 export const viewport = {
-  maximumScale: 1, // Disable auto-zoom on mobile Safari
+	maximumScale: 1, // Disable auto-zoom on mobile Safari
 };
 
 const LIGHT_THEME_COLOR = "hsl(0 0% 100%)";
 const DARK_THEME_COLOR = "hsl(240deg 10% 3.92%)";
 const UMAMI_WEBSITE_ID = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID?.trim();
 const UMAMI_SRC =
-  process.env.NEXT_PUBLIC_UMAMI_SRC?.trim() ||
-  "https://cloud.umami.is/script.js";
+	process.env.NEXT_PUBLIC_UMAMI_SRC?.trim() ||
+	"https://cloud.umami.is/script.js";
 const THEME_COLOR_SCRIPT = `\
 (function() {
   var html = document.documentElement;
@@ -42,43 +57,42 @@ const THEME_COLOR_SCRIPT = `\
 })();`;
 
 export default function RootLayout({
-  children,
+	children,
 }: Readonly<{
-  children: React.ReactNode;
+	children: React.ReactNode;
 }>) {
-  return (
-    <html
-      // `next-themes` injects an extra classname to the body element to avoid
-      // visual flicker before hydration. Hence the `suppressHydrationWarning`
-      // prop is necessary to avoid the React hydration mismatch warning.
-      // https://github.com/pacocoursey/next-themes?tab=readme-ov-file#with-app
-      lang="en"
-      suppressHydrationWarning
-    >
-      <head>
-        <script
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required"
-          dangerouslySetInnerHTML={{
-            __html: THEME_COLOR_SCRIPT,
-          }}
-        />
-        {UMAMI_WEBSITE_ID ? (
-          <script data-website-id={UMAMI_WEBSITE_ID} defer src={UMAMI_SRC} />
-        ) : null}
-      </head>
-      <body className="antialiased">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          disableTransitionOnChange
-          enableSystem
-        >
-          <Toaster position="top-center" />
-          <SessionProvider>{children}</SessionProvider>
-        </ThemeProvider>
-        <Analytics />
-        <SpeedInsights />
-      </body>
-    </html>
-  );
+	return (
+		<html
+			// `next-themes` injects an extra classname to the body element to avoid
+			// visual flicker before hydration. Hence the `suppressHydrationWarning`
+			// prop is necessary to avoid the React hydration mismatch warning.
+			// https://github.com/pacocoursey/next-themes?tab=readme-ov-file#with-app
+			lang="en"
+			suppressHydrationWarning
+		>
+			<head>
+				<script
+					dangerouslySetInnerHTML={{
+						__html: THEME_COLOR_SCRIPT,
+					}}
+				/>
+				{UMAMI_WEBSITE_ID ? (
+					<script data-website-id={UMAMI_WEBSITE_ID} defer src={UMAMI_SRC} />
+				) : null}
+			</head>
+			<body className="antialiased">
+				<ThemeProvider
+					attribute="class"
+					defaultTheme="system"
+					disableTransitionOnChange
+					enableSystem
+				>
+					<Toaster position="top-center" />
+					<SessionProvider>{children}</SessionProvider>
+				</ThemeProvider>
+				<Analytics />
+				<SpeedInsights />
+			</body>
+		</html>
+	);
 }
