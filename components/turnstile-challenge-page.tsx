@@ -9,7 +9,7 @@ import { TurnstileWidget } from "./turnstile-widget";
 
 function CloudflareIcon() {
   return (
-    <svg aria-label="Cloudflare" fill="none" viewBox="0 0 96 42" width="132">
+    <svg aria-label="Cloudflare" fill="none" viewBox="0 0 96 42" width="96">
       <path
         d="M63.35 34.72H19.08a2.48 2.48 0 0 1-.52-4.9l42.55-8.8a.98.98 0 0 1 1.17 1.21l-1.47 4.66h16.94a2.48 2.48 0 0 1 .53 4.9l-14.44 2.99a.95.95 0 0 1-.49-.06"
         fill="#F38020"
