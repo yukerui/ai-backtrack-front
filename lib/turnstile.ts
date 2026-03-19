@@ -1,5 +1,6 @@
-export const TURNSTILE_VERIFY_PATH = "/verify";
-export const TURNSTILE_REDIRECT_PARAM = "redirect";
+export const TURNSTILE_CHALLENGE_PATH = "/challenge";
+export const TURNSTILE_RETURN_TO_PARAM = "returnTo";
+export const TURNSTILE_VERIFIED_SESSION_KEY = "cf_turnstile_verified_v1";
 
 export function getTurnstileSiteKey() {
   return (
@@ -41,10 +42,34 @@ export function normalizeTurnstileRedirectPath(
   return normalized;
 }
 
-export function buildTurnstileVerificationPath(redirectPath: string) {
+export function buildTurnstileChallengePath(redirectPath: string) {
   const searchParams = new URLSearchParams({
-    [TURNSTILE_REDIRECT_PARAM]: normalizeTurnstileRedirectPath(redirectPath),
+    [TURNSTILE_RETURN_TO_PARAM]: normalizeTurnstileRedirectPath(redirectPath),
   });
 
-  return `${TURNSTILE_VERIFY_PATH}?${searchParams.toString()}`;
+  return `${TURNSTILE_CHALLENGE_PATH}?${searchParams.toString()}`;
+}
+
+export function hasTurnstileVerifiedSession() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return window.sessionStorage.getItem(TURNSTILE_VERIFIED_SESSION_KEY) === "1";
+}
+
+export function setTurnstileVerifiedSession() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.setItem(TURNSTILE_VERIFIED_SESSION_KEY, "1");
+}
+
+export function clearTurnstileVerifiedSession() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.removeItem(TURNSTILE_VERIFIED_SESSION_KEY);
 }

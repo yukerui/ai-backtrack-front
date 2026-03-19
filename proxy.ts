@@ -5,11 +5,6 @@ import {
   isDevelopmentEnvironment,
   TASK_SESSION_COOKIE_NAME,
 } from "./lib/constants";
-import {
-  buildTurnstileVerificationPath,
-  isTurnstileEnabled,
-  shouldRequireTurnstileVerification,
-} from "./lib/turnstile";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -49,18 +44,6 @@ export async function proxy(request: NextRequest) {
 
   if (token && !isGuest && ["/login", "/register"].includes(pathname)) {
     return NextResponse.redirect(new URL("/", request.url));
-  }
-
-  if (
-    token &&
-    isTurnstileEnabled() &&
-    shouldRequireTurnstileVerification(pathname) &&
-    !request.cookies.get("cf_clearance")?.value
-  ) {
-    const redirectPath = `${pathname}${request.nextUrl.search}`;
-    return NextResponse.redirect(
-      new URL(buildTurnstileVerificationPath(redirectPath), request.url)
-    );
   }
 
   const response = NextResponse.next();

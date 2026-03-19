@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildTurnstileVerificationPath,
+  buildTurnstileChallengePath,
   normalizeTurnstileRedirectPath,
   shouldRequireTurnstileVerification,
 } from "../../lib/turnstile";
@@ -18,10 +18,10 @@ test("normalizeTurnstileRedirectPath rejects unsafe targets", () => {
   assert.equal(normalizeTurnstileRedirectPath("//example.com"), "/");
 });
 
-test("buildTurnstileVerificationPath encodes the redirect target", () => {
+test("buildTurnstileChallengePath encodes the redirect target", () => {
   assert.equal(
-    buildTurnstileVerificationPath("/chat/123?foo=1"),
-    "/verify?redirect=%2Fchat%2F123%3Ffoo%3D1"
+    buildTurnstileChallengePath("/chat/123?foo=1"),
+    "/challenge?returnTo=%2Fchat%2F123%3Ffoo%3D1"
   );
 });
 
