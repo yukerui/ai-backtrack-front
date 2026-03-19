@@ -206,30 +206,6 @@ const FEISHU_PERMISSION_IMPORT_JSON = `{
   }
 }`;
 
-const CREATE_PREPARATION_STEPS = [
-  {
-    key: "createdFeishuApp",
-    title: "创建飞书应用",
-    description: "先在飞书开放平台创建企业自建应用，后续配置都围绕这个应用完成。",
-  },
-  {
-    key: "preparedCredentials",
-    title: "准备凭证并导入权限",
-    description:
-      "复制 App ID / App Secret，并先导入权限 JSON，避免创建后还要来回找配置入口。",
-  },
-  {
-    key: "enabledBotCapability",
-    title: "启用 Bot 能力",
-    description:
-      "必须先启用 Bot，网页创建成功后服务端才有能力继续接飞书长连接和消息监听。",
-  },
-] satisfies Array<{
-  key: keyof CreatePreparationChecklist;
-  title: string;
-  description: string;
-}>;
-
 const CHANNEL_SETUP_STEPS = [
   {
     key: "configuredLongConnection",
@@ -747,6 +723,12 @@ export function BotFatherConsole({
   const lastSetupBotSlug = recentCreateContext?.botSlug || null;
   const lastSetupStarted = recentCreateContext?.started || false;
   const lastSetupOutput = recentCreateContext?.output || "";
+  const lastSetupRow = lastSetupBotSlug
+    ? botRows.find((row) => row.bot.bot_slug === lastSetupBotSlug) || null
+    : null;
+  const lastSetupChecklist =
+    lastSetupRow?.setupChecklist || DEFAULT_CHANNEL_SETUP_CHECKLIST;
+  const lastSetupOwnerClaimed = lastSetupRow?.ownerClaimed || false;
   const lastSetupPairing = lastSetupBotSlug
     ? pairingCache[lastSetupBotSlug] || null
     : null;
@@ -840,6 +822,7 @@ export function BotFatherConsole({
 
   function openDraftChannelWorkbench() {
     setActivePanel("draft");
+    setRecentCreateContext(null);
     setCreateForm(DEFAULT_CREATE_FORM);
     setCreatePreparation(DEFAULT_CREATE_PREPARATION_CHECKLIST);
     setEditingBotSlug(null);
@@ -899,8 +882,8 @@ export function BotFatherConsole({
         setCreatePreparation(DEFAULT_CREATE_PREPARATION_CHECKLIST);
         setConsoleOutput("");
       }
-      setActivePanel("bot");
       setSelectedBotSlug(submittedForm.botSlug);
+      setActivePanel(editingSlug ? "bot" : "draft");
       setScrollTarget(editingSlug ? "channel-management-card" : "channel-next-steps");
       await mutateBots();
       if (editingSlug) {
@@ -1351,193 +1334,268 @@ export function BotFatherConsole({
       </div>
 
       {activeViewMode === "onboard" ? (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,460px)]">
-          <div className="space-y-6">
-            <Card>
+        <div className="space-y-6">
+          {!lastSetupBotSlug ? (
+            <Card id="draft-precreate-checklist">
               <CardHeader>
                 <CardTitle>创建与接入工作台</CardTitle>
                 <CardDescription>
-                  先在飞书完成创建前准备，再在右侧提交 App ID / App Secret。
-                  创建成功后，页面会继续把你留在这里完成长连接、事件、发布和
-                  Owner 配对。
+                  先完成第 1、2 步，再在后面创建基础连接。Bot 创建成功之前，后续步骤先不展开。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-900">
-                  关键顺序已经替你理顺了：先启用 Bot，网页创建成功后，服务端才有能力继续接飞书长连接。
+                  关键顺序已经替你理顺了：先启用 Bot，再创建基础连接。长连接、消息事件和发布要等 Bot 创建成功后再继续。
                 </div>
 
-                <a
-                  className="inline-flex text-sm text-foreground underline underline-offset-4"
-                  href="https://open.feishu.cn/app"
-                  rel="noreferrer"
-                  target="_blank"
+                <StepCard
+                  description="在飞书开放平台创建企业自建应用，后续配置都围绕这个应用完成。"
+                  step={1}
+                  title="创建飞书应用"
                 >
-                  打开飞书开放平台
-                </a>
-
-                <div className="space-y-3" id="draft-precreate-checklist">
-                  {CREATE_PREPARATION_STEPS.map((step, index) => (
-                    <label
-                      className="flex gap-3 rounded-2xl border bg-background/80 p-4"
-                      key={step.key}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <a
+                      className="inline-flex text-sm text-foreground underline underline-offset-4"
+                      href="https://open.feishu.cn/app"
+                      rel="noreferrer"
+                      target="_blank"
                     >
+                      打开飞书开放平台
+                    </a>
+                    <label className="flex items-center gap-2 text-sm">
                       <input
-                        checked={createPreparation[step.key]}
-                        className="mt-1 h-4 w-4"
+                        checked={createPreparation.createdFeishuApp}
                         onChange={(event) => {
                           updateCreatePreparationChecklist(
-                            step.key,
+                            "createdFeishuApp",
                             event.target.checked
                           );
                         }}
                         type="checkbox"
                       />
-                      <div className="min-w-0 space-y-1">
-                        <div className="font-medium text-sm">
-                          {index + 1}. {step.title}
-                        </div>
-                        <div className="text-muted-foreground text-sm">
-                          {step.description}
-                        </div>
-                      </div>
+                      已完成
                     </label>
-                  ))}
-                </div>
+                  </div>
+                </StepCard>
 
-                <Collapsible
-                  className="min-w-0 overflow-hidden rounded-xl border bg-muted/30"
-                  defaultOpen={false}
+                <StepCard
+                  description="复制 App ID / App Secret、导入权限，并在飞书里启用 Bot 能力。这里只保留创建前真正需要做的事。"
+                  step={2}
+                  title="准备凭证并启用 Bot"
                 >
-                  <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <p className="font-medium text-foreground text-sm">
-                        权限导入 JSON
-                      </p>
-                      <p className="text-muted-foreground text-xs">
-                        在“权限管理 -&gt; 批量导入/导出权限 -&gt;
-                        导入权限”里直接粘贴。
-                      </p>
-                    </div>
-                    <CollapsibleTrigger asChild>
-                      <Button size="sm" type="button" variant="outline">
-                        查看 JSON
-                      </Button>
-                    </CollapsibleTrigger>
+                  <div className="grid gap-3">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        checked={createPreparation.preparedCredentials}
+                        onChange={(event) => {
+                          updateCreatePreparationChecklist(
+                            "preparedCredentials",
+                            event.target.checked
+                          );
+                        }}
+                        type="checkbox"
+                      />
+                      已复制 App ID / App Secret，并导入权限
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        checked={createPreparation.enabledBotCapability}
+                        onChange={(event) => {
+                          updateCreatePreparationChecklist(
+                            "enabledBotCapability",
+                            event.target.checked
+                          );
+                        }}
+                        type="checkbox"
+                      />
+                      已启用 Bot 能力
+                    </label>
                   </div>
-                  <CollapsibleContent className="min-w-0">
-                    <div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
-                      <pre className="w-full min-w-0 whitespace-pre-wrap break-all p-3 font-mono text-[13px] leading-5 text-foreground sm:text-xs sm:leading-5 sm:whitespace-pre">
-                        {FEISHU_PERMISSION_IMPORT_JSON}
-                      </pre>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
 
-                <div className="space-y-3 rounded-2xl border bg-muted/20 p-4">
-                  <div>
-                    <div className="font-medium text-sm">创建后继续完成的 4 步</div>
+                  <Collapsible
+                    className="min-w-0 overflow-hidden rounded-xl border bg-muted/30"
+                    defaultOpen={false}
+                  >
+                    <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-1">
+                        <p className="font-medium text-foreground text-sm">
+                          权限导入 JSON
+                        </p>
+                        <p className="text-muted-foreground text-xs">
+                          在“权限管理 -&gt; 批量导入/导出权限 -&gt;
+                          导入权限”里直接粘贴。
+                        </p>
+                      </div>
+                      <CollapsibleTrigger asChild>
+                        <Button size="sm" type="button" variant="outline">
+                          查看 JSON
+                        </Button>
+                      </CollapsibleTrigger>
+                    </div>
+                    <CollapsibleContent className="min-w-0">
+                      <div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
+                        <pre className="w-full min-w-0 whitespace-pre-wrap break-all p-3 font-mono text-[13px] leading-5 text-foreground sm:text-xs sm:leading-5 sm:whitespace-pre">
+                          {FEISHU_PERMISSION_IMPORT_JSON}
+                        </pre>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </StepCard>
+
+                <div className="rounded-2xl border bg-background/80 p-5" id="channel-form-card">
+                  <div className="space-y-1">
+                    <div className="font-medium text-sm">3. 创建基础连接</div>
                     <div className="text-muted-foreground text-sm">
-                      这些步骤依赖 Bot 已经创建成功。创建后页面不会跳走，而是继续在这里显示下一步。
+                      这里再提交 App ID / App Secret。创建成功后，当前面板会直接切换成后续步骤，并展示已经生成的配对码。
                     </div>
                   </div>
-                  <StepCard
-                    description="回飞书“事件与回调”切成长连接。这一步必须在 Bot 创建后做。"
-                    step={5}
-                    title="选择长连接"
-                  />
-                  <StepCard
-                    description="添加事件 `im.message.receive_v1`，否则 Bot 收不到私聊配对消息。"
-                    step={6}
-                    title="添加消息事件"
-                  />
-                  <StepCard
-                    description="创建并发布版本，让长连接和事件配置真正生效。"
-                    step={7}
-                    title="创建并发布版本"
-                  />
-                  <StepCard
-                    description="回网页生成配对码，再把它私聊发给 Bot 完成 Owner 绑定。"
-                    step={8}
-                    title="完成 Owner 配对"
-                  />
+                  <div className="mt-5">{renderChannelForm()}</div>
                 </div>
               </CardContent>
             </Card>
+          ) : (
+            <Card
+              className="border-emerald-500/20 bg-emerald-500/5"
+              id="channel-next-steps"
+            >
+              <CardHeader>
+                <CardTitle>创建成功，继续完成接入</CardTitle>
+                <CardDescription>
+                  `{lastSetupBotSlug}` 的 Bot 已创建成功。前两步已经完成，下面只保留创建后的剩余步骤，并直接展示配对码。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                <div className="rounded-2xl border border-emerald-500/20 bg-background/80 p-4 text-muted-foreground">
+                  {lastSetupStarted
+                    ? "系统已按默认策略请求启动 Bridge。"
+                    : "本次只创建了 Channel，还没有自动启动 Bridge。"}{" "}
+                  现在按顺序完成长连接、消息事件和版本发布即可。
+                </div>
 
-            {lastSetupBotSlug ? (
-              <Card
-                className="border-emerald-500/20 bg-emerald-500/5"
-                id="channel-next-steps"
-              >
-                <CardHeader>
-                  <CardTitle>创建成功，继续完成接入</CardTitle>
-                  <CardDescription>
-                    `{lastSetupBotSlug}` 的基础连接已经创建。现在不要离开这个工作台，继续完成长连接、事件、发布和 Owner 配对。
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4 text-sm">
-                  <div className="grid gap-2 text-muted-foreground">
-                    <div>1. 回飞书选择长连接。</div>
-                    <div>2. 添加消息事件 `im.message.receive_v1`。</div>
-                    <div>3. 创建并发布版本。</div>
-                    <div>4. 回到网页生成配对码，并把它私聊发给自己的 Bot。</div>
-                    <div>
-                      {lastSetupStarted
-                        ? "系统已按默认策略请求启动 Bridge。"
-                        : "本次只创建了 Channel，未自动启动 Bridge。"}
+                <label className="flex gap-3 rounded-2xl border bg-background/80 p-4">
+                  <input
+                    checked={lastSetupChecklist.configuredLongConnection}
+                    className="mt-1 h-4 w-4"
+                    onChange={(event) => {
+                      if (!lastSetupBotSlug) {
+                        return;
+                      }
+                      updateChannelSetupChecklist(
+                        lastSetupBotSlug,
+                        "configuredLongConnection",
+                        event.target.checked
+                      );
+                    }}
+                    type="checkbox"
+                  />
+                  <div className="min-w-0 space-y-1">
+                    <div className="font-medium text-sm">4. 选择长连接</div>
+                    <div className="text-muted-foreground text-sm">
+                      回飞书“事件与回调”切成长连接。这一步必须在 Bot 创建成功后做。
                     </div>
                   </div>
+                </label>
+
+                <label className="flex gap-3 rounded-2xl border bg-background/80 p-4">
+                  <input
+                    checked={lastSetupChecklist.addedMessageEvent}
+                    className="mt-1 h-4 w-4"
+                    onChange={(event) => {
+                      if (!lastSetupBotSlug) {
+                        return;
+                      }
+                      updateChannelSetupChecklist(
+                        lastSetupBotSlug,
+                        "addedMessageEvent",
+                        event.target.checked
+                      );
+                    }}
+                    type="checkbox"
+                  />
+                  <div className="min-w-0 space-y-1">
+                    <div className="font-medium text-sm">5. 添加消息事件</div>
+                    <div className="text-muted-foreground text-sm">
+                      添加事件 `im.message.receive_v1`，否则 Bot 收不到私聊配对消息。
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex gap-3 rounded-2xl border bg-background/80 p-4">
+                  <input
+                    checked={lastSetupChecklist.publishedVersion}
+                    className="mt-1 h-4 w-4"
+                    onChange={(event) => {
+                      if (!lastSetupBotSlug) {
+                        return;
+                      }
+                      updateChannelSetupChecklist(
+                        lastSetupBotSlug,
+                        "publishedVersion",
+                        event.target.checked
+                      );
+                    }}
+                    type="checkbox"
+                  />
+                  <div className="min-w-0 space-y-1">
+                    <div className="font-medium text-sm">6. 创建并发布版本</div>
+                    <div className="text-muted-foreground text-sm">
+                      让刚刚的长连接和事件配置真正生效。
+                    </div>
+                  </div>
+                </label>
+
+                {lastSetupOwnerClaimed ? (
+                  <div className="rounded-2xl border border-emerald-500/20 bg-background/80 p-4 text-emerald-800 text-sm">
+                    Owner 已绑定完成。这个 Channel 现在可以进入日常管理。
+                  </div>
+                ) : (
                   <PairingNonceCard
                     botSlug={lastSetupBotSlug}
                     busy={busyAction === "pairing"}
                     onCheckStatus={() => {
-                      setActivePanel("bot");
-                      setSelectedBotSlug(lastSetupBotSlug);
-                      refreshCurrentBot();
+                      mutateBots();
                     }}
                     onRefresh={handleRefreshPairing}
                     pairing={lastSetupPairing}
                   />
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      onClick={() => {
-                        setActivePanel("bot");
-                        setSelectedBotSlug(lastSetupBotSlug);
-                      }}
-                      type="button"
-                    >
-                      打开这个 Channel
-                    </Button>
-                  </div>
-                  <Collapsible defaultOpen={false}>
-                    <CollapsibleTrigger asChild>
-                      <Button size="sm" type="button" variant="outline">
-                        查看本次创建输出
-                      </Button>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <Textarea
-                        className="mt-3 min-h-[220px] font-mono text-xs"
-                        readOnly
-                        value={lastSetupOutput}
-                      />
-                    </CollapsibleContent>
-                  </Collapsible>
-                </CardContent>
-              </Card>
-            ) : null}
-          </div>
+                )}
 
-          <Card id="channel-form-card">
-            <CardHeader>
-              <CardTitle>创建基础连接</CardTitle>
-              <CardDescription>
-                这里先提交 App ID / App Secret。创建成功后不会跳到“已创建”页，而是继续在当前工作台提示你完成后续步骤。
-              </CardDescription>
-            </CardHeader>
-            <CardContent>{renderChannelForm()}</CardContent>
-          </Card>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => {
+                      setActivePanel("bot");
+                      setSelectedBotSlug(lastSetupBotSlug);
+                    }}
+                    type="button"
+                  >
+                    打开这个 Channel
+                  </Button>
+                  <Button
+                    onClick={openDraftChannelWorkbench}
+                    type="button"
+                    variant="outline"
+                  >
+                    新建另一个 Channel
+                  </Button>
+                </div>
+
+                <Collapsible defaultOpen={false}>
+                  <CollapsibleTrigger asChild>
+                    <Button size="sm" type="button" variant="outline">
+                      查看本次创建输出
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <Textarea
+                      className="mt-3 min-h-[220px] font-mono text-xs"
+                      readOnly
+                      value={lastSetupOutput}
+                    />
+                  </CollapsibleContent>
+                </Collapsible>
+              </CardContent>
+            </Card>
+          )}
         </div>
       ) : (
         <div className="grid gap-6 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
@@ -1721,72 +1779,6 @@ export function BotFatherConsole({
           </div>
 
           <div className="space-y-6">
-            {lastSetupBotSlug ? (
-              <Card className="border-emerald-500/20 bg-emerald-500/5">
-                <CardHeader>
-                  <CardTitle>最近创建的 Channel</CardTitle>
-                  <CardDescription>
-                    `{lastSetupBotSlug}` 只完成了基础连接创建，还没有自动变成“接入完成”。
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4 text-sm">
-                  <div className="grid gap-2 text-muted-foreground">
-                    <div>凭证已通过校验，Channel 注册信息已经保存。</div>
-                    <div>
-                      接下来仍要回飞书完成长连接、消息事件和版本发布。
-                    </div>
-                    <div>
-                      {lastSetupStarted
-                        ? "已按默认策略请求启动 Bridge。"
-                        : "本次仅创建 Channel，未自动启动 Bridge。"}
-                    </div>
-                    <div>
-                      下一步请把网页里的配对码私聊发送给这个 Bot，完成 Owner
-                      绑定。
-                    </div>
-                  </div>
-                  <PairingNonceCard
-                    botSlug={lastSetupBotSlug}
-                    busy={busyAction === "pairing"}
-                    onCheckStatus={() => {
-                      setActivePanel("bot");
-                      setSelectedBotSlug(lastSetupBotSlug);
-                      refreshCurrentBot();
-                    }}
-                    onRefresh={handleRefreshPairing}
-                    pairing={lastSetupPairing}
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      onClick={() => {
-                        if (lastSetupBotSlug) {
-                          setActivePanel("bot");
-                          setSelectedBotSlug(lastSetupBotSlug);
-                        }
-                      }}
-                      type="button"
-                    >
-                      查看这个 Channel
-                    </Button>
-                  </div>
-                  <Collapsible defaultOpen={false}>
-                    <CollapsibleTrigger asChild>
-                      <Button size="sm" type="button" variant="outline">
-                        查看详细输出
-                      </Button>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <Textarea
-                        className="mt-3 min-h-[220px] font-mono text-xs"
-                        readOnly
-                        value={lastSetupOutput}
-                      />
-                    </CollapsibleContent>
-                  </Collapsible>
-                </CardContent>
-              </Card>
-            ) : null}
-
             <Card>
               <CardHeader>
                 <CardTitle>Channel 详情与操作</CardTitle>
