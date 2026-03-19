@@ -109,6 +109,24 @@ type ActionResponse = {
   action?: string;
   lines?: number;
   bot?: BotDetail | null;
+  pairing?: PairingSession | null;
+};
+
+type PairingSession = {
+  bot_slug: string;
+  status: string;
+  nonce: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  expires_at: string | null;
+  consumed_at: string | null;
+  claimed_open_id?: string | null;
+  claimed_chat_id?: string | null;
+};
+
+type PairingResponse = {
+  ok: true;
+  pairing: PairingSession | null;
 };
 
 type CreateFormState = {
@@ -219,9 +237,78 @@ function splitCsv(value: string) {
 function formatOwnerOpenId(value: string | null | undefined) {
   const normalized = String(value || "").trim();
   if (!normalized) {
-    return "待首次消息自动绑定";
+    return "待发送配对码完成绑定";
   }
   return normalized;
+}
+
+function isPendingPairing(pairing: PairingSession | null | undefined) {
+  return pairing?.status === "pending" && Boolean(pairing?.nonce);
+}
+
+function pairingActionLabel(pairing: PairingSession | null | undefined) {
+  return isPendingPairing(pairing) ? "刷新配对码" : "生成配对码";
+}
+
+function PairingNonceCard({
+  botSlug,
+  pairing,
+  busy,
+  onRefresh,
+}: {
+  botSlug: string;
+  pairing: PairingSession | null | undefined;
+  busy: boolean;
+  onRefresh: (botSlug: string) => void;
+}) {
+  const pending = isPendingPairing(pairing);
+  const nonce = pending ? pairing?.nonce : null;
+  const expiresAt = formatTimestamp(pairing?.expires_at);
+
+  return (
+    <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+      <div className="space-y-1">
+        <div className="font-medium text-sm">Owner 配对码</div>
+        <div className="text-muted-foreground text-sm">
+          在网页生成一次性配对码后，用飞书私聊你自己的 Bot 发送这串文本，Bot
+          校验成功后才会把当前飞书账号绑定为 Owner。
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border bg-background/90 p-4">
+        <div className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+          当前配对码
+        </div>
+        <div className="mt-2 break-all font-mono text-3xl tracking-[0.32em]">
+          {nonce || "点击下方生成"}
+        </div>
+        <div className="mt-2 text-muted-foreground text-xs">
+          {pending
+            ? `Bot: ${botSlug} · 有效期至 ${expiresAt}`
+            : "当前没有可用的配对码。"}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-1 text-muted-foreground text-sm">
+        <div>1. 记下上面的配对码。</div>
+        <div>2. 在飞书里私聊这个 Bot，并直接发送这串配对码。</div>
+        <div>3. 收到确认后，当前飞书账号就会成为这个 Channel 的 Owner。</div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button
+          disabled={busy}
+          onClick={() => {
+            onRefresh(botSlug);
+          }}
+          type="button"
+          variant={pending ? "outline" : "default"}
+        >
+          {busy ? "处理中..." : pairingActionLabel(pairing)}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 async function callApi<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -273,6 +360,8 @@ export function BotFatherConsole({
   const [lastSetupOutput, setLastSetupOutput] = useState("");
   const [lastSetupBotSlug, setLastSetupBotSlug] = useState<string | null>(null);
   const [lastSetupStarted, setLastSetupStarted] = useState(false);
+  const [lastSetupPairing, setLastSetupPairing] =
+    useState<PairingSession | null>(null);
 
   const {
     data: infoData,
@@ -341,9 +430,67 @@ export function BotFatherConsole({
 
   const selectedBot = detailData?.bot || null;
   const selectedBotRunning = selectedBot?.state === "running";
+  const selectedBotOwnerClaimed = Boolean(
+    String(selectedBot?.owner_open_id || "").trim()
+  );
+  const pairingKey = useMemo(() => {
+    if (!selectedBot || selectedBotOwnerClaimed) {
+      return null;
+    }
+    return `/api/bot-father/bots/${encodeURIComponent(selectedBot.bot_slug)}/pairing`;
+  }, [selectedBot, selectedBotOwnerClaimed]);
+  const {
+    data: pairingData,
+    mutate: mutatePairing,
+    isLoading: pairingLoading,
+  } = useSWR<PairingResponse>(pairingKey, fetcher);
+  const selectedBotPairing = pairingData?.pairing || null;
+  let selectedBotPairingSection: ReactNode = null;
+  if (selectedBot && !selectedBotOwnerClaimed) {
+    if (pairingLoading && !selectedBotPairing) {
+      selectedBotPairingSection = (
+        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-muted-foreground text-sm">
+          正在加载配对码...
+        </div>
+      );
+    } else {
+      selectedBotPairingSection = (
+        <PairingNonceCard
+          botSlug={selectedBot.bot_slug}
+          busy={busyAction === "pairing"}
+          onRefresh={handleRefreshPairing}
+          pairing={selectedBotPairing}
+        />
+      );
+    }
+  }
 
   async function refreshCurrentBot() {
-    await Promise.all([mutateBots(), mutateDetail()]);
+    await Promise.all([mutateBots(), mutateDetail(), mutatePairing()]);
+  }
+
+  async function handleRefreshPairing(botSlug: string) {
+    setBusyAction("pairing");
+    try {
+      const result = await callApi<PairingResponse>(
+        `/api/bot-father/bots/${encodeURIComponent(botSlug)}/pairing`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      if (lastSetupBotSlug === botSlug) {
+        setLastSetupPairing(result.pairing || null);
+      }
+      await Promise.all([mutatePairing(), mutateBots(), mutateDetail()]);
+      toast.success("配对码已刷新");
+    } catch (error) {
+      toast.error(getClientErrorMessage(error));
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   function closeEditSheet() {
@@ -389,6 +536,7 @@ export function BotFatherConsole({
         setLastSetupOutput(result.output || "创建完成");
         setLastSetupBotSlug(submittedForm.botSlug);
         setLastSetupStarted(submittedForm.start);
+        setLastSetupPairing(result.pairing || null);
         setConsoleOutput("");
       }
       setSelectedBotSlug(submittedForm.botSlug);
@@ -491,6 +639,7 @@ export function BotFatherConsole({
         setLastSetupBotSlug(null);
         setLastSetupOutput("");
         setLastSetupStarted(false);
+        setLastSetupPairing(null);
       }
       closeEditSheet();
       setSelectedBotSlug(null);
@@ -517,7 +666,8 @@ export function BotFatherConsole({
         ) : (
           <div className="rounded-xl border bg-muted/30 p-3 text-muted-foreground text-sm">
             完成左侧准备后，在这里一次性提交连接信息。默认会在创建后自动启动，
-            首次给 Bot 发送消息时会自动绑定 Owner Open ID。
+            创建完成后网页会生成一串配对码，你需要把这串配对码私聊发给自己的
+            Bot，系统才会绑定 Owner Open ID。
           </div>
         )}
 
@@ -789,8 +939,8 @@ export function BotFatherConsole({
               <CardHeader>
                 <CardTitle>7 步完成接入</CardTitle>
                 <CardDescription>
-                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。首次给 Bot
-                  发送私聊消息时，系统会自动绑定 Owner Open ID。
+                  按顺序完成飞书配置后，在右侧填写信息创建 Channel。创建成功后，
+                  网页会生成一串一次性配对码，你需要把它私聊发给自己的 Bot。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -861,7 +1011,7 @@ export function BotFatherConsole({
                   title="添加消息事件"
                 />
                 <StepCard
-                  description="最后在“版本管理与发布”里创建版本并发布，然后首次给这个 Bot 发送一条私聊消息，系统会自动记录 Owner Open ID。"
+                  description="最后在“版本管理与发布”里创建版本并发布。回到网页生成配对码，再把这串配对码私聊发送给你的 Bot，校验成功后才会绑定 Owner。"
                   step={7}
                   title="创建并发布版本"
                 />
@@ -873,8 +1023,8 @@ export function BotFatherConsole({
             <CardHeader>
               <CardTitle>接入新 Channel</CardTitle>
               <CardDescription>
-                填写必要信息后即可创建；默认会在创建后立即启动，无需手动查询
-                Open ID。
+                填写必要信息后即可创建；默认会在创建后立即启动。Owner Open ID
+                通过后续配对码自动识别，无需手动查询。
               </CardDescription>
             </CardHeader>
             <CardContent>{renderChannelForm()}</CardContent>
@@ -1062,7 +1212,17 @@ export function BotFatherConsole({
                         ? "已按默认策略请求启动 Bridge。"
                         : "本次仅创建 Channel，未自动启动 Bridge。"}
                     </div>
+                    <div>
+                      下一步请把网页里的配对码私聊发送给这个 Bot，完成 Owner
+                      绑定。
+                    </div>
                   </div>
+                  <PairingNonceCard
+                    botSlug={lastSetupBotSlug}
+                    busy={busyAction === "pairing"}
+                    onRefresh={handleRefreshPairing}
+                    pairing={lastSetupPairing}
+                  />
                   <div className="flex flex-wrap gap-2">
                     <Button
                       onClick={() => {
@@ -1175,6 +1335,8 @@ export function BotFatherConsole({
                         </div>
                       </div>
                     </div>
+
+                    {selectedBotPairingSection}
 
                     <div className="flex flex-wrap gap-2">
                       <Button
