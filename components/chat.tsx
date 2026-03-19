@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
@@ -38,7 +38,13 @@ import {
   shouldRefreshRealtimeTokenOnError,
   shouldRetryRealtimeStreamError,
 } from "@/lib/task-recovery";
-import { buildTurnstileVerificationPath } from "@/lib/turnstile";
+import {
+  buildTurnstileChallengePath,
+  clearTurnstileVerifiedSession,
+  hasTurnstileVerifiedSession,
+  isTurnstileEnabled,
+  shouldRequireTurnstileVerification,
+} from "@/lib/turnstile";
 import type {
   Attachment,
   BacktestArtifactItem,
@@ -818,6 +824,34 @@ export function Chat({
   autoResume: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const search = searchParams.toString();
+  const query = searchParams.get("query");
+  const [turnstileGateReady, setTurnstileGateReady] = useState(
+    () => !isTurnstileEnabled()
+  );
+  const effectiveAutoResume = autoResume && turnstileGateReady;
+
+  useEffect(() => {
+    if (!isTurnstileEnabled()) {
+      setTurnstileGateReady(true);
+      return;
+    }
+
+    if (!pathname || !shouldRequireTurnstileVerification(pathname)) {
+      setTurnstileGateReady(true);
+      return;
+    }
+
+    if (hasTurnstileVerifiedSession()) {
+      setTurnstileGateReady(true);
+      return;
+    }
+
+    const redirectPath = `${pathname}${search ? `?${search}` : ""}`;
+    window.location.replace(buildTurnstileChallengePath(redirectPath));
+  }, [pathname, search]);
 
   const { visibilityType } = useChatVisibility({
     chatId: id,
@@ -1934,7 +1968,8 @@ export function Chat({
         error.cause === "cloudflare_preclearance_required"
       ) {
         const redirectPath = `${window.location.pathname}${window.location.search}`;
-        window.location.replace(buildTurnstileVerificationPath(redirectPath));
+        clearTurnstileVerifiedSession();
+        window.location.replace(buildTurnstileChallengePath(redirectPath));
         return;
       }
       const message = getClientErrorMessage(error);
@@ -1980,7 +2015,7 @@ export function Chat({
       }
 
       if (status === "submitted" || status === "streaming") {
-        if (autoResume) {
+        if (effectiveAutoResume) {
           void resumeStream().catch(() => {
             // ignore and let the user continue manually if reconnection fails
           });
@@ -2001,14 +2036,15 @@ export function Chat({
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [autoResume, refetchMessages, resumeStream, status]);
-
-  const searchParams = useSearchParams();
-  const query = searchParams.get("query");
+  }, [effectiveAutoResume, refetchMessages, resumeStream, status]);
 
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
   useEffect(() => {
+    if (!turnstileGateReady) {
+      return;
+    }
+
     if (query && !hasAppendedQuery) {
       sendMessage({
         role: "user" as const,
@@ -2018,7 +2054,7 @@ export function Chat({
       setHasAppendedQuery(true);
       window.history.replaceState({}, "", `/chat/${id}`);
     }
-  }, [query, sendMessage, hasAppendedQuery, id]);
+  }, [query, sendMessage, hasAppendedQuery, id, turnstileGateReady]);
 
   useEffect(() => {
     hasRecoveredWatchdogRef.current = false;
@@ -2042,6 +2078,10 @@ export function Chat({
   }, [status]);
 
   useEffect(() => {
+    if (!turnstileGateReady) {
+      return;
+    }
+
     // Fallback guard: if onFinish misses for any reason, recover realtime subscription from latest task metadata.
     if (status === "submitted" || status === "streaming") {
       return;
@@ -2089,9 +2129,13 @@ export function Chat({
     stopAllRealtimeRuns(pendingTaskFromData.runId);
     startRealtimeRun(pendingTaskFromData, latestAssistantMessageId);
     pendingTaskMetaRef.current = null;
-  }, [messages, status]);
+  }, [messages, status, turnstileGateReady]);
 
   useEffect(() => {
+    if (!turnstileGateReady) {
+      return;
+    }
+
     if (hasRecoveredWatchdogRef.current) {
       return;
     }
@@ -2105,7 +2149,7 @@ export function Chat({
     stopAllPollingRuns(pendingTask.runId);
     stopAllRealtimeRuns(pendingTask.runId);
     startRealtimeRun(pendingTask, pendingTask.messageId);
-  }, [id, initialMessages]);
+  }, [id, initialMessages, turnstileGateReady]);
 
   const { data: votes } = useSWR<Vote[]>(
     messages.length >= 2 ? `/api/vote?chatId=${id}` : null,
@@ -2116,7 +2160,7 @@ export function Chat({
   const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
 
   useAutoResume({
-    autoResume,
+    autoResume: effectiveAutoResume,
     initialMessages,
     resumeStream,
     setMessages,
@@ -2158,6 +2202,10 @@ export function Chat({
     );
     setRealtimeIssue(null);
   }, [messages, realtimeIssue]);
+
+  if (!turnstileGateReady) {
+    return null;
+  }
 
   return (
     <>
