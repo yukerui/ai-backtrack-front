@@ -10,6 +10,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import useSWR from "swr";
+import { useCopyToClipboard } from "usehooks-ts";
 import { GroupJoinBanner } from "@/components/group-join-banner";
 import {
 	AlertDialog,
@@ -48,6 +49,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { getClientErrorMessage } from "@/lib/errors";
 import { cn, fetcher } from "@/lib/utils";
+import { CopyIcon } from "./icons";
 import { SidebarToggle } from "./sidebar-toggle";
 
 type BotSummary = {
@@ -194,6 +196,9 @@ const DEFAULT_CHANNEL_SETUP_CHECKLIST: ChannelSetupChecklist = {
 };
 
 const CHANNEL_SETUP_STORAGE_KEY = "bot-father-channel-setup-v1";
+const FEISHU_BOT_CAPABILITY_NAME = "Bot";
+const FEISHU_LONG_CONNECTION_MODE = "长连接";
+const FEISHU_MESSAGE_EVENT_NAME = "im.message.receive_v1";
 
 const FEISHU_PERMISSION_IMPORT_JSON = `{
   "scopes": {
@@ -295,6 +300,83 @@ function CompletedStepSummary({
 			<div className="mt-1 text-muted-foreground text-sm">{description}</div>
 		</div>
 	);
+}
+
+function CopyValueButton({
+	value,
+	label,
+	successMessage,
+	disabled = false,
+}: {
+	value: string;
+	label: string;
+	successMessage: string;
+	disabled?: boolean;
+}) {
+	const [_, copyToClipboard] = useCopyToClipboard();
+
+	const handleCopy = async () => {
+		const normalizedValue = value.trim();
+		if (!normalizedValue) {
+			toast.error("没有可复制的内容");
+			return;
+		}
+
+		await copyToClipboard(normalizedValue);
+		toast.success(successMessage);
+	};
+
+	return (
+		<Button
+			className="gap-2"
+			disabled={disabled}
+			onClick={handleCopy}
+			size="sm"
+			type="button"
+			variant="outline"
+		>
+			<CopyIcon size={14} />
+			{label}
+		</Button>
+	);
+}
+
+function SetupStepCopyHint({
+	stepKey,
+}: {
+	stepKey: keyof ChannelSetupChecklist;
+}) {
+	if (stepKey === "configuredLongConnection") {
+		return (
+			<div className="flex flex-wrap items-center gap-2">
+				<div className="rounded-md border bg-background px-2 py-1 font-mono text-xs">
+					{FEISHU_LONG_CONNECTION_MODE}
+				</div>
+				<CopyValueButton
+					label="复制“长连接”"
+					successMessage="长连接已复制"
+					value={FEISHU_LONG_CONNECTION_MODE}
+				/>
+			</div>
+		);
+	}
+
+	if (stepKey === "addedMessageEvent") {
+		return (
+			<div className="flex flex-wrap items-center gap-2">
+				<div className="rounded-md border bg-background px-2 py-1 font-mono text-xs">
+					{FEISHU_MESSAGE_EVENT_NAME}
+				</div>
+				<CopyValueButton
+					label="复制事件名"
+					successMessage="事件名已复制"
+					value={FEISHU_MESSAGE_EVENT_NAME}
+				/>
+			</div>
+		);
+	}
+
+	return null;
 }
 
 function formatTimestamp(value: string | null | undefined) {
@@ -567,6 +649,14 @@ function PairingNonceCard({
 				>
 					{busy ? "处理中..." : pairingActionLabel(pairing)}
 				</Button>
+				{nonce ? (
+					<CopyValueButton
+						disabled={busy}
+						label="复制配对码"
+						successMessage="配对码已复制"
+						value={nonce}
+					/>
+				) : null}
 				{onCheckStatus ? (
 					<Button
 						disabled={busy}
@@ -1568,6 +1658,16 @@ export function BotFatherConsole({
 														/>
 														已启用 Bot 能力
 													</label>
+													<div className="flex flex-wrap items-center gap-2">
+														<div className="rounded-md border bg-background px-2 py-1 font-mono text-xs">
+															{FEISHU_BOT_CAPABILITY_NAME}
+														</div>
+														<CopyValueButton
+															label="复制 Bot 能力名"
+															successMessage="Bot 能力名已复制"
+															value={FEISHU_BOT_CAPABILITY_NAME}
+														/>
+													</div>
 												</div>
 
 												<Collapsible
@@ -1584,11 +1684,18 @@ export function BotFatherConsole({
 																导入权限”里直接粘贴。
 															</p>
 														</div>
-														<CollapsibleTrigger asChild>
-															<Button size="sm" type="button" variant="outline">
-																查看 JSON
-															</Button>
-														</CollapsibleTrigger>
+														<div className="flex flex-wrap gap-2">
+															<CopyValueButton
+																label="一键复制 JSON"
+																successMessage="权限导入 JSON 已复制"
+																value={FEISHU_PERMISSION_IMPORT_JSON}
+															/>
+															<CollapsibleTrigger asChild>
+																<Button size="sm" type="button" variant="outline">
+																	查看 JSON
+																</Button>
+															</CollapsibleTrigger>
+														</div>
 													</div>
 													<CollapsibleContent className="min-w-0">
 														<div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
@@ -1701,6 +1808,11 @@ export function BotFatherConsole({
 													}
 													title={lastSetupCurrentStep.title}
 												>
+													<SetupStepCopyHint
+														stepKey={
+															lastSetupCurrentStep.key as keyof ChannelSetupChecklist
+														}
+													/>
 													<label className="flex items-center gap-2 text-sm">
 														<input
 															checked={
@@ -2138,6 +2250,11 @@ export function BotFatherConsole({
 																	}
 																	title={selectedCurrentStep.title}
 																>
+																	<SetupStepCopyHint
+																		stepKey={
+																			selectedCurrentStep.key as keyof ChannelSetupChecklist
+																		}
+																	/>
 																	<label className="flex items-center gap-2 text-sm">
 																		<input
 																			checked={
