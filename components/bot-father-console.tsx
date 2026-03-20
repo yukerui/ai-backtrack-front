@@ -1,5 +1,6 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import {
   type FormEvent,
   type ReactNode,
@@ -255,7 +256,7 @@ function StepCard({
   description,
   children,
 }: {
-  step: number;
+  step: ReactNode;
   title: string;
   description: string;
   children?: ReactNode;
@@ -274,6 +275,24 @@ function StepCard({
           {children}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CompletedStepSummary({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+      <div className="text-emerald-700 text-xs uppercase tracking-[0.18em]">
+        已完成
+      </div>
+      <div className="mt-1 font-medium text-sm text-foreground">{title}</div>
+      <div className="mt-1 text-muted-foreground text-sm">{description}</div>
     </div>
   );
 }
@@ -419,12 +438,17 @@ function getChannelLifecycle(
     nextStep: waitingOn[0] || "进入日常管理",
     waitingOn,
     progress:
-      4 + Object.values(setupChecklist).filter(Boolean).length + Number(ownerClaimed),
+      4 +
+      Object.values(setupChecklist).filter(Boolean).length +
+      Number(ownerClaimed),
     ownerClaimed,
   };
 }
 
-function lifecycleBadgeClass(stage: ChannelLifecycleStage, ownerClaimed: boolean) {
+function lifecycleBadgeClass(
+  stage: ChannelLifecycleStage,
+  ownerClaimed: boolean
+) {
   if (stage === "error") {
     return "border-destructive/30 bg-destructive/5 text-destructive";
   }
@@ -435,6 +459,54 @@ function lifecycleBadgeClass(stage: ChannelLifecycleStage, ownerClaimed: boolean
     return "border-amber-500/30 bg-amber-500/10 text-amber-700";
   }
   return "border-sky-500/30 bg-sky-500/10 text-sky-700";
+}
+
+function getPostCreateWorkflowProgress(
+  checklist: ChannelSetupChecklist,
+  ownerClaimed: boolean
+) {
+  const completedSteps: Array<{
+    key: keyof ChannelSetupChecklist | "ownerPairing";
+    title: string;
+    description: string;
+  }> = [];
+  let currentStep: {
+    key: keyof ChannelSetupChecklist | "ownerPairing";
+    title: string;
+    description: string;
+  } | null = null;
+
+  for (const step of CHANNEL_SETUP_STEPS) {
+    if (checklist[step.key]) {
+      completedSteps.push(step);
+      continue;
+    }
+    currentStep = step;
+    break;
+  }
+
+  if (!currentStep) {
+    if (ownerClaimed) {
+      completedSteps.push({
+        key: "ownerPairing",
+        title: "Owner 配对",
+        description: "当前飞书账号已经和这个 Channel 完成绑定。",
+      });
+    } else {
+      currentStep = {
+        key: "ownerPairing",
+        title: "完成 Owner 配对",
+        description: "把网页里的配对码私聊发给自己的 Bot，再回来刷新状态。",
+      };
+    }
+  }
+
+  return {
+    completedSteps,
+    currentStep,
+    done:
+      ownerClaimed && CHANNEL_SETUP_STEPS.every((step) => checklist[step.key]),
+  };
 }
 
 function PairingNonceCard({
@@ -602,10 +674,40 @@ export function BotFatherConsole({
   const botList = botsData?.bots || [];
   const hasBots = botList.length > 0;
   const preCreateReady = Object.values(createPreparation).every(Boolean);
+  const preCreateCredentialsReady =
+    createPreparation.preparedCredentials &&
+    createPreparation.enabledBotCapability;
+  const draftCompletedSteps = [
+    createPreparation.createdFeishuApp
+      ? {
+          key: "createdFeishuApp",
+          title: "创建飞书应用",
+          description: "飞书开放平台里的自建应用已经准备好。",
+        }
+      : null,
+    preCreateCredentialsReady
+      ? {
+          key: "preparedCredentials",
+          title: "准备凭证并启用 Bot",
+          description: "App ID / App Secret、权限导入和 Bot 能力都已处理完。",
+        }
+      : null,
+  ].filter(Boolean) as Array<{
+    key: string;
+    title: string;
+    description: string;
+  }>;
+  const draftCurrentStep = createPreparation.createdFeishuApp
+    ? preCreateCredentialsReady
+      ? "create"
+      : "credentials"
+    : "app";
 
   const botRows = useMemo(() => {
     return [...botList]
-      .map((bot) => getChannelLifecycle(bot, channelSetupChecklists[bot.bot_slug]))
+      .map((bot) =>
+        getChannelLifecycle(bot, channelSetupChecklists[bot.bot_slug])
+      )
       .sort((left, right) => {
         const stageRank: Record<ChannelLifecycleStage, number> = {
           error: 0,
@@ -623,7 +725,9 @@ export function BotFatherConsole({
       });
   }, [botList, channelSetupChecklists]);
 
-  const inProgressBotCount = botRows.filter((row) => row.stage !== "ready").length;
+  const inProgressBotCount = botRows.filter(
+    (row) => row.stage !== "ready"
+  ).length;
   const readyBotCount = botRows.filter((row) => row.stage === "ready").length;
   const errorBotCount = botRows.filter((row) => row.stage === "error").length;
 
@@ -700,7 +804,10 @@ export function BotFatherConsole({
   const selectedBot = detailData?.bot || null;
   const selectedBotRunning = selectedBot?.state === "running";
   const selectedLifecycle = selectedBot
-    ? getChannelLifecycle(selectedBot, channelSetupChecklists[selectedBot.bot_slug])
+    ? getChannelLifecycle(
+        selectedBot,
+        channelSetupChecklists[selectedBot.bot_slug]
+      )
     : null;
   const selectedBotOwnerClaimed = selectedLifecycle?.ownerClaimed || false;
   const pairingKey = useMemo(() => {
@@ -718,6 +825,12 @@ export function BotFatherConsole({
     selectedBot && !selectedBotOwnerClaimed
       ? pairingData?.pairing || pairingCache[selectedBot.bot_slug] || null
       : null;
+  const selectedWorkflow = selectedLifecycle
+    ? getPostCreateWorkflowProgress(
+        selectedLifecycle.setupChecklist,
+        selectedLifecycle.ownerClaimed
+      )
+    : null;
   const activeViewMode = activePanel === "draft" ? "onboard" : "manage";
   const filteredBotList = filteredBotRows.map((row) => row.bot);
   const lastSetupBotSlug = recentCreateContext?.botSlug || null;
@@ -732,6 +845,11 @@ export function BotFatherConsole({
   const lastSetupPairing = lastSetupBotSlug
     ? pairingCache[lastSetupBotSlug] || null
     : null;
+  const lastSetupWorkflow = getPostCreateWorkflowProgress(
+    lastSetupChecklist,
+    lastSetupOwnerClaimed
+  );
+  const showDraftWorkbench = lastSetupBotSlug === null;
   let selectedBotPairingSection: ReactNode = null;
   if (selectedBot && !selectedBotOwnerClaimed) {
     if (pairingLoading && !selectedBotPairing) {
@@ -765,7 +883,7 @@ export function BotFatherConsole({
     }
     targetElement.scrollIntoView({ behavior: "smooth", block: "start" });
     setScrollTarget(null);
-  }, [activePanel, detailLoading, scrollTarget, selectedBot?.bot_slug]);
+  }, [scrollTarget]);
 
   async function refreshCurrentBot() {
     await Promise.all([mutateBots(), mutateDetail(), mutatePairing()]);
@@ -884,7 +1002,9 @@ export function BotFatherConsole({
       }
       setSelectedBotSlug(submittedForm.botSlug);
       setActivePanel(editingSlug ? "bot" : "draft");
-      setScrollTarget(editingSlug ? "channel-management-card" : "channel-next-steps");
+      setScrollTarget(
+        editingSlug ? "channel-management-card" : "channel-next-steps"
+      );
       await mutateBots();
       if (editingSlug) {
         await mutateDetail();
@@ -1026,8 +1146,8 @@ export function BotFatherConsole({
         ) : (
           <div className="rounded-xl border bg-muted/30 p-3 text-muted-foreground text-sm">
             先在飞书侧创建应用并启用 Bot，再在这里提交 App ID / App Secret。
-            创建成功后，页面不会跳走，而是继续带你完成长连接、事件、发布和
-            Owner 配对。
+            创建成功后，页面不会跳走，而是继续带你完成长连接、事件、发布和 Owner
+            配对。
           </div>
         )}
 
@@ -1271,7 +1391,9 @@ export function BotFatherConsole({
               <p className="max-w-3xl text-muted-foreground text-sm">
                 {isAdmin
                   ? `已登录管理员：${currentUserEmail}`
-                  : `当前登录账号：${currentUserEmail}`}。创建成功后会继续留在接入流程，直到飞书长连接、消息事件、发布和 Owner 配对补齐为止。
+                  : `当前登录账号：${currentUserEmail}`}
+                。创建成功后会继续留在接入流程，直到飞书长连接、消息事件、发布和
+                Owner 配对补齐为止。
               </p>
             </div>
           </div>
@@ -1335,122 +1457,175 @@ export function BotFatherConsole({
 
       {activeViewMode === "onboard" ? (
         <div className="space-y-6">
-          {!lastSetupBotSlug ? (
+          {showDraftWorkbench ? (
             <Card id="draft-precreate-checklist">
               <CardHeader>
                 <CardTitle>创建与接入工作台</CardTitle>
                 <CardDescription>
-                  先完成第 1、2 步，再在后面创建基础连接。Bot 创建成功之前，后续步骤先不展开。
+                  不再把所有步骤一次性摊开。页面只强调当前该做的事，完成后自动收起并推进到下一阶段。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-900">
-                  关键顺序已经替你理顺了：先启用 Bot，再创建基础连接。长连接、消息事件和发布要等 Bot 创建成功后再继续。
+                  关键顺序已经替你理顺了：先启用 Bot，再创建基础连接。Bot
+                  创建成功之前，长连接、消息事件和发布都先隐藏。
                 </div>
-
-                <StepCard
-                  description="在飞书开放平台创建企业自建应用，后续配置都围绕这个应用完成。"
-                  step={1}
-                  title="创建飞书应用"
-                >
-                  <div className="flex flex-wrap items-center gap-3">
-                    <a
-                      className="inline-flex text-sm text-foreground underline underline-offset-4"
-                      href="https://open.feishu.cn/app"
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      打开飞书开放平台
-                    </a>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        checked={createPreparation.createdFeishuApp}
-                        onChange={(event) => {
-                          updateCreatePreparationChecklist(
-                            "createdFeishuApp",
-                            event.target.checked
-                          );
-                        }}
-                        type="checkbox"
-                      />
+                {draftCompletedSteps.length ? (
+                  <div className="space-y-2">
+                    <div className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
                       已完成
-                    </label>
-                  </div>
-                </StepCard>
-
-                <StepCard
-                  description="复制 App ID / App Secret、导入权限，并在飞书里启用 Bot 能力。这里只保留创建前真正需要做的事。"
-                  step={2}
-                  title="准备凭证并启用 Bot"
-                >
-                  <div className="grid gap-3">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        checked={createPreparation.preparedCredentials}
-                        onChange={(event) => {
-                          updateCreatePreparationChecklist(
-                            "preparedCredentials",
-                            event.target.checked
-                          );
-                        }}
-                        type="checkbox"
-                      />
-                      已复制 App ID / App Secret，并导入权限
-                    </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        checked={createPreparation.enabledBotCapability}
-                        onChange={(event) => {
-                          updateCreatePreparationChecklist(
-                            "enabledBotCapability",
-                            event.target.checked
-                          );
-                        }}
-                        type="checkbox"
-                      />
-                      已启用 Bot 能力
-                    </label>
-                  </div>
-
-                  <Collapsible
-                    className="min-w-0 overflow-hidden rounded-xl border bg-muted/30"
-                    defaultOpen={false}
-                  >
-                    <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="space-y-1">
-                        <p className="font-medium text-foreground text-sm">
-                          权限导入 JSON
-                        </p>
-                        <p className="text-muted-foreground text-xs">
-                          在“权限管理 -&gt; 批量导入/导出权限 -&gt;
-                          导入权限”里直接粘贴。
-                        </p>
-                      </div>
-                      <CollapsibleTrigger asChild>
-                        <Button size="sm" type="button" variant="outline">
-                          查看 JSON
-                        </Button>
-                      </CollapsibleTrigger>
                     </div>
-                    <CollapsibleContent className="min-w-0">
-                      <div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
-                        <pre className="w-full min-w-0 whitespace-pre-wrap break-all p-3 font-mono text-[13px] leading-5 text-foreground sm:text-xs sm:leading-5 sm:whitespace-pre">
-                          {FEISHU_PERMISSION_IMPORT_JSON}
-                        </pre>
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
-                </StepCard>
-
-                <div className="rounded-2xl border bg-background/80 p-5" id="channel-form-card">
-                  <div className="space-y-1">
-                    <div className="font-medium text-sm">3. 创建基础连接</div>
-                    <div className="text-muted-foreground text-sm">
-                      这里再提交 App ID / App Secret。创建成功后，当前面板会直接切换成后续步骤，并展示已经生成的配对码。
-                    </div>
+                    {draftCompletedSteps.map((step) => (
+                      <CompletedStepSummary
+                        description={step.description}
+                        key={step.key}
+                        title={step.title}
+                      />
+                    ))}
                   </div>
-                  <div className="mt-5">{renderChannelForm()}</div>
-                </div>
+                ) : null}
+
+                <AnimatePresence initial={false} mode="popLayout">
+                  {draftCurrentStep === "app" ? (
+                    <motion.div
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      initial={{ opacity: 0, y: 12 }}
+                      key="draft-app"
+                      layout
+                    >
+                      <StepCard
+                        description="在飞书开放平台创建企业自建应用，后续配置都围绕这个应用完成。"
+                        step={1}
+                        title="创建飞书应用"
+                      >
+                        <div className="flex flex-wrap items-center gap-3">
+                          <a
+                            className="inline-flex text-sm text-foreground underline underline-offset-4"
+                            href="https://open.feishu.cn/app"
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            打开飞书开放平台
+                          </a>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              checked={createPreparation.createdFeishuApp}
+                              onChange={(event) => {
+                                updateCreatePreparationChecklist(
+                                  "createdFeishuApp",
+                                  event.target.checked
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                            已完成
+                          </label>
+                        </div>
+                      </StepCard>
+                    </motion.div>
+                  ) : null}
+
+                  {draftCurrentStep === "credentials" ? (
+                    <motion.div
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      initial={{ opacity: 0, y: 12 }}
+                      key="draft-credentials"
+                      layout
+                    >
+                      <StepCard
+                        description="复制 App ID / App Secret、导入权限，并在飞书里启用 Bot 能力。这里只保留创建前真正需要做的事。"
+                        step={2}
+                        title="准备凭证并启用 Bot"
+                      >
+                        <div className="grid gap-3">
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              checked={createPreparation.preparedCredentials}
+                              onChange={(event) => {
+                                updateCreatePreparationChecklist(
+                                  "preparedCredentials",
+                                  event.target.checked
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                            已复制 App ID / App Secret，并导入权限
+                          </label>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              checked={createPreparation.enabledBotCapability}
+                              onChange={(event) => {
+                                updateCreatePreparationChecklist(
+                                  "enabledBotCapability",
+                                  event.target.checked
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                            已启用 Bot 能力
+                          </label>
+                        </div>
+
+                        <Collapsible
+                          className="min-w-0 overflow-hidden rounded-xl border bg-muted/30"
+                          defaultOpen={false}
+                        >
+                          <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="space-y-1">
+                              <p className="font-medium text-foreground text-sm">
+                                权限导入 JSON
+                              </p>
+                              <p className="text-muted-foreground text-xs">
+                                在“权限管理 -&gt; 批量导入/导出权限 -&gt;
+                                导入权限”里直接粘贴。
+                              </p>
+                            </div>
+                            <CollapsibleTrigger asChild>
+                              <Button size="sm" type="button" variant="outline">
+                                查看 JSON
+                              </Button>
+                            </CollapsibleTrigger>
+                          </div>
+                          <CollapsibleContent className="min-w-0">
+                            <div className="mx-3 mb-3 min-w-0 overflow-x-auto rounded-md border bg-background">
+                              <pre className="w-full min-w-0 whitespace-pre-wrap break-all p-3 font-mono text-[13px] leading-5 text-foreground sm:text-xs sm:leading-5 sm:whitespace-pre">
+                                {FEISHU_PERMISSION_IMPORT_JSON}
+                              </pre>
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </StepCard>
+                    </motion.div>
+                  ) : null}
+
+                  {draftCurrentStep === "create" ? (
+                    <motion.div
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      initial={{ opacity: 0, y: 12 }}
+                      key="draft-create"
+                      layout
+                    >
+                      <div
+                        className="rounded-2xl border bg-background/80 p-5"
+                        id="channel-form-card"
+                      >
+                        <div className="space-y-1">
+                          <div className="font-medium text-sm">
+                            3. 创建基础连接
+                          </div>
+                          <div className="text-muted-foreground text-sm">
+                            前置准备已经确认完了。现在提交 App ID / App Secret，
+                            创建成功后页面会直接切换到剩余步骤，并把配对码放出来。
+                          </div>
+                        </div>
+                        <div className="mt-5">{renderChannelForm()}</div>
+                      </div>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
               </CardContent>
             </Card>
           ) : (
@@ -1461,7 +1636,8 @@ export function BotFatherConsole({
               <CardHeader>
                 <CardTitle>创建成功，继续完成接入</CardTitle>
                 <CardDescription>
-                  `{lastSetupBotSlug}` 的 Bot 已创建成功。前两步已经完成，下面只保留创建后的剩余步骤，并直接展示配对码。
+                  `{lastSetupBotSlug}` 的 Bot
+                  已创建成功。前两步已经完成，下面只保留创建后的剩余步骤，并直接展示配对码。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 text-sm">
@@ -1469,80 +1645,93 @@ export function BotFatherConsole({
                   {lastSetupStarted
                     ? "系统已按默认策略请求启动 Bridge。"
                     : "本次只创建了 Channel，还没有自动启动 Bridge。"}{" "}
-                  现在按顺序完成长连接、消息事件和版本发布即可。
+                  页面已经自动隐藏创建前步骤，只保留创建后的接入任务和配对码。
                 </div>
+                <CompletedStepSummary
+                  description="App ID / App Secret 已经提交，基础连接已经创建成功。"
+                  title="创建基础连接"
+                />
 
-                <label className="flex gap-3 rounded-2xl border bg-background/80 p-4">
-                  <input
-                    checked={lastSetupChecklist.configuredLongConnection}
-                    className="mt-1 h-4 w-4"
-                    onChange={(event) => {
-                      if (!lastSetupBotSlug) {
-                        return;
-                      }
-                      updateChannelSetupChecklist(
-                        lastSetupBotSlug,
-                        "configuredLongConnection",
-                        event.target.checked
-                      );
-                    }}
-                    type="checkbox"
-                  />
-                  <div className="min-w-0 space-y-1">
-                    <div className="font-medium text-sm">4. 选择长连接</div>
-                    <div className="text-muted-foreground text-sm">
-                      回飞书“事件与回调”切成长连接。这一步必须在 Bot 创建成功后做。
+                {lastSetupWorkflow.completedSteps.length ? (
+                  <div className="space-y-2">
+                    <div className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                      创建后已完成
                     </div>
+                    {lastSetupWorkflow.completedSteps.map((step) => (
+                      <CompletedStepSummary
+                        description={step.description}
+                        key={step.key}
+                        title={step.title}
+                      />
+                    ))}
                   </div>
-                </label>
+                ) : null}
 
-                <label className="flex gap-3 rounded-2xl border bg-background/80 p-4">
-                  <input
-                    checked={lastSetupChecklist.addedMessageEvent}
-                    className="mt-1 h-4 w-4"
-                    onChange={(event) => {
-                      if (!lastSetupBotSlug) {
-                        return;
-                      }
-                      updateChannelSetupChecklist(
-                        lastSetupBotSlug,
-                        "addedMessageEvent",
-                        event.target.checked
-                      );
-                    }}
-                    type="checkbox"
-                  />
-                  <div className="min-w-0 space-y-1">
-                    <div className="font-medium text-sm">5. 添加消息事件</div>
-                    <div className="text-muted-foreground text-sm">
-                      添加事件 `im.message.receive_v1`，否则 Bot 收不到私聊配对消息。
-                    </div>
-                  </div>
-                </label>
-
-                <label className="flex gap-3 rounded-2xl border bg-background/80 p-4">
-                  <input
-                    checked={lastSetupChecklist.publishedVersion}
-                    className="mt-1 h-4 w-4"
-                    onChange={(event) => {
-                      if (!lastSetupBotSlug) {
-                        return;
-                      }
-                      updateChannelSetupChecklist(
-                        lastSetupBotSlug,
-                        "publishedVersion",
-                        event.target.checked
-                      );
-                    }}
-                    type="checkbox"
-                  />
-                  <div className="min-w-0 space-y-1">
-                    <div className="font-medium text-sm">6. 创建并发布版本</div>
-                    <div className="text-muted-foreground text-sm">
-                      让刚刚的长连接和事件配置真正生效。
-                    </div>
-                  </div>
-                </label>
+                <AnimatePresence initial={false} mode="popLayout">
+                  {lastSetupWorkflow.currentStep ? (
+                    <motion.div
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      initial={{ opacity: 0, y: 12 }}
+                      key={lastSetupWorkflow.currentStep.key}
+                      layout
+                    >
+                      {lastSetupWorkflow.currentStep.key === "ownerPairing" ? (
+                        <StepCard
+                          description={
+                            lastSetupWorkflow.currentStep.description
+                          }
+                          step="7"
+                          title={lastSetupWorkflow.currentStep.title}
+                        >
+                          <div className="text-muted-foreground text-sm">
+                            配对码已经生成在下面，发出去之后点“我已发送，刷新状态”。
+                          </div>
+                        </StepCard>
+                      ) : (
+                        <StepCard
+                          description={
+                            lastSetupWorkflow.currentStep.description
+                          }
+                          step={
+                            lastSetupWorkflow.currentStep.key ===
+                            "configuredLongConnection"
+                              ? 4
+                              : lastSetupWorkflow.currentStep.key ===
+                                  "addedMessageEvent"
+                                ? 5
+                                : 6
+                          }
+                          title={lastSetupWorkflow.currentStep.title}
+                        >
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              checked={
+                                lastSetupChecklist[
+                                  lastSetupWorkflow.currentStep
+                                    .key as keyof ChannelSetupChecklist
+                                ]
+                              }
+                              onChange={(event) => {
+                                if (!lastSetupBotSlug) {
+                                  return;
+                                }
+                                updateChannelSetupChecklist(
+                                  lastSetupBotSlug,
+                                  lastSetupWorkflow.currentStep
+                                    .key as keyof ChannelSetupChecklist,
+                                  event.target.checked
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                            我已完成这一步
+                          </label>
+                        </StepCard>
+                      )}
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
 
                 {lastSetupOwnerClaimed ? (
                   <div className="rounded-2xl border border-emerald-500/20 bg-background/80 p-4 text-emerald-800 text-sm">
@@ -1604,7 +1793,8 @@ export function BotFatherConsole({
               <CardHeader>
                 <CardTitle>接入列表</CardTitle>
                 <CardDescription>
-                  未完成的 Channel 会优先排在前面。先选中一个，再到右侧继续接入或做日常管理。
+                  未完成的 Channel
+                  会优先排在前面。先选中一个，再到右侧继续接入或做日常管理。
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1896,44 +2086,91 @@ export function BotFatherConsole({
                         </div>
                       </div>
 
-                      <div className="mt-4 grid gap-3">
-                        {CHANNEL_SETUP_STEPS.map((step) => (
-                          <label
-                            className="flex gap-3 rounded-2xl border bg-background/80 p-4"
-                            key={step.key}
-                          >
-                            <input
-                              checked={
-                                selectedLifecycle?.setupChecklist[step.key] || false
-                              }
-                              className="mt-1 h-4 w-4"
-                              onChange={(event) => {
-                                updateChannelSetupChecklist(
-                                  selectedBot.bot_slug,
-                                  step.key,
-                                  event.target.checked
-                                );
-                              }}
-                              type="checkbox"
-                            />
-                            <div className="min-w-0 space-y-1">
-                              <div className="font-medium text-sm">
-                                {step.title}
-                              </div>
-                              <div className="text-muted-foreground text-sm">
-                                {step.description}
-                              </div>
+                      <div className="mt-4 space-y-3">
+                        <CompletedStepSummary
+                          description="App ID / App Secret 已提交，基础连接已经创建成功。"
+                          title="创建基础连接"
+                        />
+
+                        {selectedWorkflow?.completedSteps.length ? (
+                          <div className="space-y-2">
+                            <div className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                              已完成
                             </div>
-                          </label>
-                        ))}
-                        <div className="rounded-2xl border bg-background/80 p-4">
-                          <div className="font-medium text-sm">Owner 配对</div>
-                          <div className="mt-1 text-muted-foreground text-sm">
-                            {selectedBotOwnerClaimed
-                              ? "当前飞书账号已完成 Owner 绑定。"
-                              : "把配对码私聊发给自己的 Bot 后，再回来刷新状态。"}
+                            {selectedWorkflow.completedSteps.map((step) => (
+                              <CompletedStepSummary
+                                description={step.description}
+                                key={step.key}
+                                title={step.title}
+                              />
+                            ))}
                           </div>
-                        </div>
+                        ) : null}
+
+                        <AnimatePresence initial={false} mode="popLayout">
+                          {selectedWorkflow?.currentStep ? (
+                            <motion.div
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -8 }}
+                              initial={{ opacity: 0, y: 12 }}
+                              key={selectedWorkflow.currentStep.key}
+                              layout
+                            >
+                              {selectedWorkflow.currentStep.key ===
+                              "ownerPairing" ? (
+                                <StepCard
+                                  description={
+                                    selectedWorkflow.currentStep.description
+                                  }
+                                  step="7"
+                                  title={selectedWorkflow.currentStep.title}
+                                >
+                                  <div className="text-muted-foreground text-sm">
+                                    配对码在下面，发出去后刷新状态即可。
+                                  </div>
+                                </StepCard>
+                              ) : (
+                                <StepCard
+                                  description={
+                                    selectedWorkflow.currentStep.description
+                                  }
+                                  step={
+                                    selectedWorkflow.currentStep.key ===
+                                    "configuredLongConnection"
+                                      ? 4
+                                      : selectedWorkflow.currentStep.key ===
+                                          "addedMessageEvent"
+                                        ? 5
+                                        : 6
+                                  }
+                                  title={selectedWorkflow.currentStep.title}
+                                >
+                                  <label className="flex items-center gap-2 text-sm">
+                                    <input
+                                      checked={
+                                        selectedLifecycle?.setupChecklist[
+                                          selectedWorkflow.currentStep
+                                            .key as keyof ChannelSetupChecklist
+                                        ] || false
+                                      }
+                                      className="h-4 w-4"
+                                      onChange={(event) => {
+                                        updateChannelSetupChecklist(
+                                          selectedBot.bot_slug,
+                                          selectedWorkflow.currentStep
+                                            .key as keyof ChannelSetupChecklist,
+                                          event.target.checked
+                                        );
+                                      }}
+                                      type="checkbox"
+                                    />
+                                    我已完成这一步
+                                  </label>
+                                </StepCard>
+                              )}
+                            </motion.div>
+                          ) : null}
+                        </AnimatePresence>
                       </div>
                     </div>
 
@@ -2002,16 +2239,16 @@ export function BotFatherConsole({
                           {selectedBot.display_name || "-"}
                         </div>
                       </div>
-                        <div className="rounded-xl border bg-background/80 p-4">
-                          <div className="text-muted-foreground text-xs">
-                            状态
-                          </div>
-                          <div className="mt-1">
-                            <Badge variant={stateVariant(selectedBot.state)}>
-                              {formatBotStateLabel(selectedBot.state)}
-                            </Badge>
-                          </div>
+                      <div className="rounded-xl border bg-background/80 p-4">
+                        <div className="text-muted-foreground text-xs">
+                          状态
                         </div>
+                        <div className="mt-1">
+                          <Badge variant={stateVariant(selectedBot.state)}>
+                            {formatBotStateLabel(selectedBot.state)}
+                          </Badge>
+                        </div>
+                      </div>
                       <div className="rounded-xl border bg-background/80 p-4">
                         <div className="text-muted-foreground text-xs">
                           Owner Open ID
