@@ -263,7 +263,7 @@ function StepCard({
 }: {
 	step: ReactNode;
 	title: string;
-	description: string;
+	description?: string;
 	children?: ReactNode;
 }) {
 	return (
@@ -275,7 +275,9 @@ function StepCard({
 				<div className="min-w-0 space-y-2">
 					<div>
 						<div className="font-medium text-sm text-foreground">{title}</div>
-						<div className="text-muted-foreground text-sm">{description}</div>
+						{description ? (
+							<div className="text-muted-foreground text-sm">{description}</div>
+						) : null}
 					</div>
 					{children}
 				</div>
@@ -289,7 +291,7 @@ function CompletedStepSummary({
 	description,
 }: {
 	title: string;
-	description: string;
+	description?: string;
 }) {
 	return (
 		<div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3">
@@ -297,7 +299,9 @@ function CompletedStepSummary({
 				已完成
 			</div>
 			<div className="mt-1 font-medium text-sm text-foreground">{title}</div>
-			<div className="mt-1 text-muted-foreground text-sm">{description}</div>
+			{description ? (
+				<div className="mt-1 text-muted-foreground text-sm">{description}</div>
+			) : null}
 		</div>
 	);
 }
@@ -648,10 +652,7 @@ function PairingNonceCard({
 		<div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
 			<div className="space-y-1">
 				<div className="font-medium text-sm">Owner 配对码</div>
-				<div className="text-muted-foreground text-sm">
-					在网页生成一次性配对码后，用飞书私聊你自己的 Bot 发送这串文本，Bot
-					校验成功后才会把当前飞书账号绑定为 Owner。
-				</div>
+				<div className="text-muted-foreground text-sm">用飞书私聊 Bot 发送配对码。</div>
 			</div>
 
 			<div className="mt-4 rounded-xl border bg-background/90 p-4">
@@ -960,7 +961,6 @@ export function BotFatherConsole({
 	const activeViewMode = activePanel === "draft" ? "onboard" : "manage";
 	const filteredBotList = filteredBotRows.map((row) => row.bot);
 	const lastSetupBotSlug = recentCreateContext?.botSlug || null;
-	const lastSetupStarted = recentCreateContext?.started || false;
 	const lastSetupOutput = recentCreateContext?.output || "";
 	const lastSetupRow = lastSetupBotSlug
 		? botRows.find((row) => row.bot.bot_slug === lastSetupBotSlug) || null
@@ -1271,11 +1271,7 @@ export function BotFatherConsole({
 						已载入当前 Channel 配置。出于安全原因，现有 App Secret
 						不会自动回填。
 					</div>
-				) : (
-					<div className="rounded-xl border bg-muted/30 p-3 text-muted-foreground text-sm">
-						先在飞书侧创建应用并启用 Bot，再在这里提交 App ID / App Secret。
-					</div>
-				)}
+				) : null}
 
 				<div className="grid gap-4 md:grid-cols-2">
 					<div className="space-y-2">
@@ -1581,15 +1577,8 @@ export function BotFatherConsole({
 						<Card id="draft-precreate-checklist">
 							<CardHeader>
 								<CardTitle>创建与接入工作台</CardTitle>
-								<CardDescription>
-									不再把所有步骤一次性摊开。页面只强调当前该做的事，完成后自动收起并推进到下一阶段。
-								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-5">
-								<div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-900">
-									关键顺序已经替你理顺了：先启用 Bot，再创建基础连接。Bot
-									创建成功之前，长连接、消息事件和发布都先隐藏。
-								</div>
 								{draftCompletedSteps.length ? (
 									<div className="space-y-2">
 										<div className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
@@ -1615,7 +1604,6 @@ export function BotFatherConsole({
 											layout
 										>
 											<StepCard
-												description="在飞书开放平台创建企业自建应用，后续配置都围绕这个应用完成。"
 												step={1}
 												title="创建飞书应用"
 											>
@@ -1653,7 +1641,6 @@ export function BotFatherConsole({
 											layout
 										>
 											<StepCard
-												description="复制 App ID / App Secret、导入权限，并启用 Bot 能力。"
 												step={2}
 												title="准备凭证并启用 Bot"
 											>
@@ -1737,7 +1724,6 @@ export function BotFatherConsole({
 													<div className="font-medium text-sm">
 														3. 创建基础连接
 													</div>
-													<div className="text-muted-foreground text-sm">提交 App ID / App Secret。</div>
 												</div>
 												<div className="mt-5">{renderChannelForm()}</div>
 											</div>
@@ -1756,15 +1742,7 @@ export function BotFatherConsole({
 								<CardDescription>{`Channel：${lastSetupBotSlug}`}</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-4 text-sm">
-								<div className="rounded-2xl border border-emerald-500/20 bg-background/80 p-4 text-muted-foreground">
-									{lastSetupStarted
-										? "系统已按默认策略请求启动 Bridge。"
-										: "本次只创建了 Channel，还没有自动启动 Bridge。"}
-								</div>
-								<CompletedStepSummary
-									description="App ID / App Secret 已经提交，基础连接已经创建成功。"
-									title="创建基础连接"
-								/>
+								<CompletedStepSummary title="创建基础连接" />
 
 								{lastSetupWorkflow.completedSteps.length ? (
 									<div className="space-y-2">
@@ -1792,13 +1770,11 @@ export function BotFatherConsole({
 										>
 											{lastSetupCurrentStep.key === "ownerPairing" ? (
 												<StepCard
-													description={lastSetupCurrentStep.description}
 													step="7"
 													title={lastSetupCurrentStep.title}
 												/>
 											) : (
 												<StepCard
-													description={lastSetupCurrentStep.description}
 													step={
 														lastSetupCurrentStep.key ===
 														"configuredLongConnection"
@@ -1841,7 +1817,7 @@ export function BotFatherConsole({
 
 								{lastSetupOwnerClaimed ? (
 									<div className="rounded-2xl border border-emerald-500/20 bg-background/80 p-4 text-emerald-800 text-sm">
-										Owner 已绑定完成。这个 Channel 现在可以进入日常管理。
+										Owner 已绑定
 									</div>
 								) : (
 									<PairingNonceCard
@@ -1898,10 +1874,6 @@ export function BotFatherConsole({
 						<Card>
 							<CardHeader>
 								<CardTitle>接入列表</CardTitle>
-								<CardDescription>
-									未完成的 Channel
-									会优先排在前面。先选中一个，再到右侧继续接入或做日常管理。
-								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-4">
 								<div className="space-y-3">
@@ -2081,9 +2053,6 @@ export function BotFatherConsole({
 						<Card>
 							<CardHeader>
 								<CardTitle>Channel 详情与操作</CardTitle>
-								<CardDescription>
-									先看接入状态，再做启停、编辑、日志和排障。接入未完成时，右侧会优先显示配对和下一步。
-								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-6">
 								{selectedBotSlug ? null : (
@@ -2171,10 +2140,7 @@ export function BotFatherConsole({
 
 										<div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
 											<div className="space-y-3">
-												<CompletedStepSummary
-													description="App ID / App Secret 已提交，基础连接已经创建成功。"
-													title="创建基础连接"
-												/>
+												<CompletedStepSummary title="创建基础连接" />
 
 												{selectedWorkflow?.completedSteps.length ? (
 													<div className="space-y-2">
@@ -2202,13 +2168,11 @@ export function BotFatherConsole({
 														>
 															{selectedCurrentStep.key === "ownerPairing" ? (
 																<StepCard
-																	description={selectedCurrentStep.description}
 																	step="7"
 																	title={selectedCurrentStep.title}
 																/>
 															) : (
 																<StepCard
-																	description={selectedCurrentStep.description}
 																	step={
 																		selectedCurrentStep.key ===
 																		"configuredLongConnection"
